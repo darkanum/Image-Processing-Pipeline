@@ -98,7 +98,7 @@ docker compose up --build
 
 Then open:
 
-- **Frontend (DEMO)**: <http://localhost:8080>
+- **Frontend (DEMO)**: <http://localhost:8000>
 - **Firebase emulator UI**: <http://localhost:4000>
 - **API health**: <http://localhost:3001/health>
 

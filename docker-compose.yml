@@ -30,7 +30,7 @@ services:
     ports:
       - "4000:4000"   # emulator UI
       - "8080:8080"   # Firestore
-      - "9099:9099"   # Auth
+      - "9090:9099"   # Auth (shifted to 9090 to avoid host conflicts)
       - "9199:9199"   # Storage
     healthcheck:
       test: ["CMD", "wget", "-q", "-O-", "http://localhost:4000/"]
@@ -106,7 +106,7 @@ services:
     depends_on:
       - api
     ports:
-      - "8080:80"
+      - "8000:80"   # frontend moved off 8080 (taken by Firestore emulator)
     restart: unless-stopped
 
 volumes:
