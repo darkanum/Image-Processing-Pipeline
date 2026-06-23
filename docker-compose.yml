@@ -67,7 +67,7 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3001
-      LOG_LEVEL: info
+      LOG_LEVEL: debug
       REDIS_HOST: redis
       REDIS_PORT: 6379
       FIREBASE_PROJECT_ID: demo-image-pipeline
@@ -75,6 +75,9 @@ services:
       FIRESTORE_EMULATOR_HOST: firebase-emulator:8080
       FIREBASE_STORAGE_EMULATOR_HOST: firebase-emulator:9199
       FIREBASE_AUTH_EMULATOR_HOST: firebase-emulator:9099
+      # Public URL the BROWSER uses to fetch stored images — must match the
+      # firebase-emulator host port mapping for `storage` in this file.
+      PUBLIC_STORAGE_HOST: http://localhost:9200
       WORKER_CONCURRENCY: 4
       JOB_MAX_IMAGE_BYTES: 10485760
       JOB_DOWNLOAD_TIMEOUT_MS: 20000
@@ -102,6 +105,7 @@ services:
       FIRESTORE_EMULATOR_HOST: firebase-emulator:8080
       FIREBASE_STORAGE_EMULATOR_HOST: firebase-emulator:9199
       FIREBASE_AUTH_EMULATOR_HOST: firebase-emulator:9099
+      PUBLIC_STORAGE_HOST: http://localhost:9200
       WORKER_CONCURRENCY: 4
       JOB_MAX_IMAGE_BYTES: 10485760
       JOB_DOWNLOAD_TIMEOUT_MS: 20000

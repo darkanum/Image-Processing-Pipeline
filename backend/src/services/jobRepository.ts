@@ -1,5 +1,6 @@
 import { FieldValue, Timestamp } from "firebase-admin/firestore";
 import { getDb, getBucket } from "./firebase.js";
+import { isEmulatorMode } from "../config/env.js";
 import { logger } from "../utils/logger.js";
 import type { JobRecord, ProgressUpdate, MetadataPatch } from "../types/job.js";
 
@@ -119,11 +120,30 @@ export const uploadResult = async (
     resumable: false,
   });
 
+  logger.info({ id, filename, bytes: buffer.length }, "storage: uploaded result");
+
+  // Return a browser-accessible URL.
+  //
+  // In production this is a real v4 signed URL from getSignedUrl(). The signed
+  // URL contains a long-lived signature so the browser can GET the file
+  // without further auth.
+  //
+  // In emulator mode the Storage emulator's signed URL generator embeds the
+  // container-internal hostname (e.g. `firebase-emulator:9199`), which the
+  // browser can't resolve. Instead we build the Storage emulator's public
+  // download URL directly — it accepts `?alt=media` for inline rendering.
+  if (isEmulatorMode() && process.env.FIREBASE_STORAGE_EMULATOR_HOST) {
+    const publicHost = process.env.PUBLIC_STORAGE_HOST
+      ?? process.env.FIREBASE_STORAGE_EMULATOR_HOST;
+    const bucketName = bucket.name;
+    const encodedPath = encodeURIComponent(filename);
+    return `${publicHost}/v0/b/${bucketName}/o/${encodedPath}?alt=media`;
+  }
+
   const [signedUrl] = await file.getSignedUrl({
     action: "read",
     expires: Date.now() + 7 * 24 * 3600 * 1000,
   });
-  logger.info({ id, filename, bytes: buffer.length }, "storage: uploaded result");
   return signedUrl;
 };
 
