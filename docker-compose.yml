@@ -8,13 +8,19 @@ name: image-processing-pipeline
 #   - frontend         : Vite-built React app served by nginx
 #
 # HOST PORT MAP (chosen to avoid clashes on a busy host):
-#   frontend     8088 -> 80
-#   api          3100 -> 3001
-#   firebase UI  4001 -> 4000
-#   firestore    8085 -> 8080
-#   auth         9095 -> 9099
-#   storage      9200 -> 9199
-#   redis        6390 -> 6379
+#   frontend     127.0.0.1:8088 -> 80
+#   api          127.0.0.1:3100 -> 3001
+#   firebase UI  127.0.0.1:4001 -> 4000
+#   firestore    127.0.0.1:8085 -> 8080
+#   auth         127.0.0.1:9095 -> 9099
+#   storage      127.0.0.1:9200 -> 9199
+#   redis        127.0.0.1:6390 -> 6379
+#
+# All host ports are bound to 127.0.0.1 (IPv4 only). Docker Desktop on
+# Windows has a known issue where IPv6 port forwarding hangs — the
+# browser resolves `localhost` to `::1` first and waits indefinitely.
+# Binding to IPv4 only avoids that and makes `http://localhost:<port>`
+# work via the 127.0.0.1 fallback.
 #
 # If you need to move these, change ONLY the host side (left of `->`) here
 # and `VITE_FIRESTORE_EMULATOR_HOST` / `VITE_FIREBASE_STORAGE_EMULATOR_HOST`
@@ -27,7 +33,8 @@ services:
     container_name: pipeline-redis
     command: ["redis-server", "--appendonly", "yes", "--save", "60", "1"]
     ports:
-      - "6390:6379"
+      # Force IPv4 binding — see note at top of file.
+      - "127.0.0.1:6390:6379"
     volumes:
       - redis-data:/data
     healthcheck:
@@ -42,10 +49,11 @@ services:
       context: ./firebase
     container_name: pipeline-firebase
     ports:
-      - "4001:4000"   # emulator UI
-      - "8085:8080"   # Firestore
-      - "9095:9099"   # Auth
-      - "9200:9199"   # Storage
+      # Force IPv4 binding — see note at top of file.
+      - "127.0.0.1:4001:4000"   # emulator UI
+      - "127.0.0.1:8085:8080"   # Firestore
+      - "127.0.0.1:9095:9099"   # Auth
+      - "127.0.0.1:9200:9199"   # Storage
     healthcheck:
       test: ["CMD", "wget", "-q", "-O-", "http://localhost:4000/"]
       interval: 15s
@@ -82,7 +90,8 @@ services:
       JOB_MAX_IMAGE_BYTES: 10485760
       JOB_DOWNLOAD_TIMEOUT_MS: 20000
     ports:
-      - "3100:3001"
+      # Force IPv4 binding — see note at top of file.
+      - "127.0.0.1:3100:3001"
     restart: unless-stopped
 
   worker:
@@ -127,7 +136,11 @@ services:
     depends_on:
       - api
     ports:
-      - "8088:80"
+      # Force IPv4 binding. Docker Desktop on Windows has known issues with
+      # IPv6 port forwarding (host resolves `localhost` -> ::1 first, which
+      # then hangs). Binding to IPv4 only makes `localhost` resolve fast via
+      # 127.0.0.1 and avoids the wait.
+      - "127.0.0.1:8088:80"
     restart: unless-stopped
 
 volumes:
