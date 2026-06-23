@@ -1,0 +1,9 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /{allPaths=**} {
+      // Demo rules — public read/write. Tighten for production.
+      allow read, write: if true;
+    }
+  }
+}

@@ -1,0 +1,113 @@
+name: image-processing-pipeline
+
+# All services in this stack:
+#   - redis            : BullMQ queue backend
+#   - firebase-emulator: Firestore + Storage + Auth emulators (UI on :4000)
+#   - api              : Express HTTP API
+#   - worker           : BullMQ worker that processes image jobs
+#   - frontend         : Vite-built React app served by nginx
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: pipeline-redis
+    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  firebase-emulator:
+    build:
+      context: ./firebase
+    container_name: pipeline-firebase
+    ports:
+      - "4000:4000"   # emulator UI
+      - "8080:8080"   # Firestore
+      - "9099:9099"   # Auth
+      - "9199:9199"   # Storage
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://localhost:4000/"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: pipeline-api
+    depends_on:
+      redis:
+        condition: service_healthy
+      firebase-emulator:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      LOG_LEVEL: info
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      FIREBASE_PROJECT_ID: demo-image-pipeline
+      FIRESTORE_EMULATOR_HOST: firebase-emulator:8080
+      FIREBASE_STORAGE_EMULATOR_HOST: firebase-emulator:9199
+      FIREBASE_AUTH_EMULATOR_HOST: firebase-emulator:9099
+      WORKER_CONCURRENCY: 4
+      JOB_MAX_IMAGE_BYTES: 10485760
+      JOB_DOWNLOAD_TIMEOUT_MS: 20000
+    ports:
+      - "3001:3001"
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: pipeline-worker
+    depends_on:
+      redis:
+        condition: service_healthy
+      firebase-emulator:
+        condition: service_healthy
+    command: ["node", "dist/worker-entry.js"]
+    environment:
+      NODE_ENV: production
+      LOG_LEVEL: info
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      FIREBASE_PROJECT_ID: demo-image-pipeline
+      FIRESTORE_EMULATOR_HOST: firebase-emulator:8080
+      FIREBASE_STORAGE_EMULATOR_HOST: firebase-emulator:9199
+      FIREBASE_AUTH_EMULATOR_HOST: firebase-emulator:9099
+      WORKER_CONCURRENCY: 4
+      JOB_MAX_IMAGE_BYTES: 10485760
+      JOB_DOWNLOAD_TIMEOUT_MS: 20000
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: http://localhost:3001
+        VITE_FIREBASE_PROJECT_ID: demo-image-pipeline
+        VITE_FIREBASE_API_KEY: demo-api-key
+        VITE_FIRESTORE_EMULATOR_HOST: localhost:8080
+        VITE_FIREBASE_STORAGE_EMULATOR_HOST: localhost:9199
+    container_name: pipeline-frontend
+    depends_on:
+      - api
+    ports:
+      - "8080:80"
+    restart: unless-stopped
+
+volumes:
+  redis-data:
