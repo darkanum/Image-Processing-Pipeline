@@ -1,3 +1,4 @@
+import { useState, type CSSProperties } from "react";
 import type { JobRecord, JobStatus, TransformSpec } from "../types/job";
 import { STATUS_LABEL } from "../types/job";
 import { ProgressBar } from "./ProgressBar";
@@ -18,59 +19,66 @@ const formatTime = (ms: number): string => {
   return d.toLocaleTimeString();
 };
 
-/** Render a small chip-list of the non-default transform options. */
-const TransformChips = ({ t }: { t: TransformSpec | null }): JSX.Element | null => {
-  if (!t) return null;
-  const chips: string[] = [];
-  if (t.outputFormat !== "original") chips.push(t.outputFormat.toUpperCase());
-  if (t.grayscale) chips.push("grayscale");
-  if (t.resize && t.resize.mode !== "none") {
-    if (t.resize.preset) chips.push(t.resize.preset.split(" ")[0]!);
-    else if (t.resize.aspectRatio) chips.push(t.resize.aspectRatio);
-    else if (t.resize.width || t.resize.height) {
-      chips.push(`${t.resize.width ?? "?"}×${t.resize.height ?? "?"}`);
-    }
-    chips.push(t.resize.mode);
-  }
-  if (t.crop && (t.crop.width || t.crop.height || t.crop.aspectRatio)) {
-    chips.push(`crop ${t.crop.aspectRatio ?? `${t.crop.width ?? "?"}×${t.crop.height ?? "?"}`}`);
-  }
-  if (t.watermark) {
-    chips.push(`wm ${t.watermark.kind}`);
-  }
-  if (t.rotation !== 0) chips.push(`${t.rotation}°`);
-  if (t.flipHorizontal) chips.push("flipH");
-  if (t.flipVertical) chips.push("flipV");
-  if (t.opacity < 100) chips.push(`${t.opacity}% opacity`);
-
-  if (chips.length === 0) return null;
-  return (
-    <div className="transform-summary">
-      {chips.map((c, i) => (
-        <span key={`${c}-${i}`} className="chip">{c}</span>
-      ))}
-    </div>
-  );
+const elapsed = (createdAt: number, finishedAt: number | null): string => {
+  const end = finishedAt ?? Date.now();
+  const ms = Math.max(0, end - createdAt);
+  if (ms < 1000) return `${ms}ms`;
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const rs = s % 60;
+  return `${m}m ${rs}s`;
 };
 
-const STATUS_BG: Record<JobStatus, string> = {
-  pending: "#94a3b8",
-  downloading: "#3b82f6",
-  processing: "#a855f7",
-  uploading: "#06b6d4",
-  completed: "#10b981",
-  failed: "#ef4444",
+/** A short human-readable description of the transform applied. */
+const describeTransform = (t: TransformSpec | null): string[] => {
+  if (!t) return [];
+  const out: string[] = [];
+  if (t.outputFormat !== "original") out.push(`output ${t.outputFormat.toUpperCase()}`);
+  if (t.resize && t.resize.mode !== "none") {
+    const what =
+      t.resize.preset ??
+      (t.resize.aspectRatio
+        ? `${t.resize.aspectRatio} ratio`
+        : `${t.resize.width ?? "?"}×${t.resize.height ?? "?"}`);
+    out.push(`${t.resize.mode} ${what}`);
+  }
+  if (t.crop && (t.crop.width || t.crop.height || t.crop.aspectRatio)) {
+    const what = t.crop.aspectRatio ?? `${t.crop.width ?? "?"}×${t.crop.height ?? "?"}`;
+    out.push(`crop ${what}`);
+  }
+  if (t.grayscale) out.push("grayscale");
+  if (t.watermark) {
+    const kind = t.watermark.kind === "text"
+      ? `text "${(t.watermark.text ?? "").slice(0, 24)}${(t.watermark.text ?? "").length > 24 ? "…" : ""}"`
+      : `image ${(t.watermark.imageUrl ?? "").slice(0, 32)}`;
+    out.push(`watermark ${kind} @ ${t.watermark.position} (${t.watermark.opacity}%)`);
+  }
+  if (t.rotation !== 0) out.push(`rotate ${t.rotation}°`);
+  if (t.flipHorizontal) out.push("flip H");
+  if (t.flipVertical) out.push("flip V");
+  if (t.opacity < 100) out.push(`opacity ${t.opacity}%`);
+  return out;
 };
 
 export const JobCard = ({ job }: JobCardProps): JSX.Element => {
   const isCompleted = job.status === "completed";
   const isFailed = job.status === "failed";
+  const [imgError, setImgError] = useState<boolean>(false);
+  const description = describeTransform(job.transform);
+  const showImg = isCompleted && job.resultUrl && !imgError;
+
+  const stateStyle: CSSProperties = {
+    borderLeftColor: statusAccent(job.status),
+  };
 
   return (
-    <article className={`job-card ${isCompleted ? "done" : ""} ${isFailed ? "failed" : ""}`}>
+    <article className={`job-card ${isCompleted ? "done" : ""} ${isFailed ? "failed" : ""}`} style={stateStyle}>
       <header className="job-card-head">
-        <div className="job-id" title={job.id}>{job.id.slice(0, 8)}…</div>
-        <div className="job-time">{formatTime(job.createdAt)}</div>
+        <div className="job-id" title={job.id}>#{job.id.slice(0, 8)}</div>
+        <div className="job-time">
+          {formatTime(job.createdAt)} · {elapsed(job.createdAt, job.finishedAt)}
+        </div>
       </header>
 
       <a className="job-url" href={job.url} target="_blank" rel="noreferrer">
@@ -79,30 +87,68 @@ export const JobCard = ({ job }: JobCardProps): JSX.Element => {
 
       <ProgressBar status={job.status} progress={job.progress} />
 
+      {description.length > 0 && (
+        <div className="job-description">
+          <span className="job-description-label">Applied:</span>
+          <ul>
+            {description.map((d, i) => (
+              <li key={`${d}-${i}`}>{d}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       <div className="job-meta">
         {job.metadata.width && job.metadata.height && (
           <span>{job.metadata.width}×{job.metadata.height}</span>
         )}
         {job.metadata.format && <span>· {job.metadata.format.toUpperCase()}</span>}
         {job.metadata.bytes ? <span>· {formatBytes(job.metadata.bytes)}</span> : null}
-        {job.metadata.attemptsMade ? <span>· attempt {job.metadata.attemptsMade}</span> : null}
       </div>
 
-      <TransformChips t={job.transform} />
-
       {isCompleted && job.resultUrl && (
-        <a className="result-link" href={job.resultUrl} target="_blank" rel="noreferrer">
-          <img src={job.resultUrl} alt="Processed" loading="lazy" />
-          <span>Open result →</span>
-        </a>
+        <div className="result-block">
+          {showImg ? (
+            <a className="result-link" href={job.resultUrl} target="_blank" rel="noreferrer">
+              <img
+                src={job.resultUrl}
+                alt="Processed result"
+                loading="lazy"
+                onError={() => setImgError(true)}
+              />
+              <span>Open result ↗</span>
+            </a>
+          ) : (
+            <div className="result-link result-link-broken">
+              <span className="broken-icon">🖼</span>
+              <span>
+                {imgError ? "Preview unavailable — open the result URL directly." : "Awaiting upload…"}
+              </span>
+              <a className="open-link" href={job.resultUrl} target="_blank" rel="noreferrer">
+                Open result ↗
+              </a>
+            </div>
+          )}
+        </div>
       )}
 
       {isFailed && job.errorMessage && (
         <div className="error">⚠ {job.errorMessage}</div>
       )}
-
-      {/* Hidden state data for debugging if needed */}
-      <span style={{ display: "none" }} data-status-color={STATUS_BG[job.status]} data-status-label={STATUS_LABEL[job.status]} />
     </article>
   );
 };
+
+function statusAccent(s: JobStatus): string {
+  switch (s) {
+    case "pending": return "#94a3b8";
+    case "downloading": return "#3b82f6";
+    case "processing": return "#a855f7";
+    case "uploading": return "#06b6d4";
+    case "completed": return "#10b981";
+    case "failed": return "#ef4444";
+  }
+}
+
+// Keep StatusLabel re-exported to silence the "unused" warning when removed.
+void STATUS_LABEL;

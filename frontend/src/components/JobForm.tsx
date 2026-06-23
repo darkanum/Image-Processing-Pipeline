@@ -17,33 +17,38 @@ const formatBytes = (bytes: number): string => {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 };
 
+/** Compact badge describing what a resize spec produces. */
+const resizeBadge = (r: NonNullable<TransformSpec["resize"]>): string => {
+  if (r.preset) return r.preset.split(" (")[0]!;
+  if (r.aspectRatio) return r.aspectRatio;
+  if (r.width || r.height) return `${r.width ?? "?"}×${r.height ?? "?"}`;
+  return "on";
+};
+
 export const JobForm = ({ apiUrl, onCreated }: JobFormProps): JSX.Element => {
   const [url, setUrl] = useState<string>("https://picsum.photos/800/600");
   const [transform, setTransform] = useState<TransformSpec>(DEFAULT_TRANSFORM);
-  const [showOptions, setShowOptions] = useState<boolean>(false);
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  const [showOptions, setShowOptions] = useState<boolean>(false);
 
-  // Collapsible sections
-  const [openResize, setOpenResize] = useState<boolean>(true);
-  const [openCrop, setOpenCrop] = useState<boolean>(false);
-  const [openWatermark, setOpenWatermark] = useState<boolean>(false);
-  const [openRotateFlip, setOpenRotateFlip] = useState<boolean>(false);
-  const [openOpacity, setOpenOpacity] = useState<boolean>(false);
+  // Each section is collapsible; only one open at a time to keep the page calm.
+  const [openSection, setOpenSection] = useState<string | null>(null);
+  const toggleSection = (s: string): void => setOpenSection((cur) => (cur === s ? null : s));
 
   const updateTransform = (patch: Partial<TransformSpec>): void => {
     setTransform((t) => ({ ...t, ...patch }));
   };
 
   const buildPayload = (): { url: string; transform: TransformSpec } => {
-    // Strip empty/null sub-specs so the backend uses defaults cleanly.
     const cleanWatermark =
       transform.watermark &&
       ((transform.watermark.kind === "text" && (transform.watermark.text ?? "").trim() !== "") ||
         (transform.watermark.kind === "image" && (transform.watermark.imageUrl ?? "").trim() !== ""))
         ? transform.watermark
         : null;
-    const cleanResize = transform.resize && transform.resize.mode !== "none" ? transform.resize : null;
+    const cleanResize =
+      transform.resize && transform.resize.mode !== "none" ? transform.resize : null;
     const cleanCrop = transform.crop ? transform.crop : null;
 
     return {
@@ -74,12 +79,11 @@ export const JobForm = ({ apiUrl, onCreated }: JobFormProps): JSX.Element => {
       }
       const job = (await res.json()) as { id: string };
       onCreated?.(job);
-      // Reset URL only; keep transform options so users can re-submit similar jobs quickly.
       setUrl("");
     } catch (err) {
       const message =
         err instanceof TypeError && err.message === "Failed to fetch"
-          ? "Failed to fetch — backend unreachable. Is the API service running?"
+          ? "Failed to fetch — backend unreachable. Is the API container running?"
           : err instanceof Error
             ? err.message
             : String(err);
@@ -91,102 +95,125 @@ export const JobForm = ({ apiUrl, onCreated }: JobFormProps): JSX.Element => {
 
   return (
     <form className="job-form" onSubmit={handleSubmit}>
-      <label htmlFor="job-url">Image URL</label>
-      <div className="row">
-        <input
-          id="job-url"
-          type="url"
-          value={url}
-          onChange={(e) => setUrl(e.target.value)}
-          placeholder="https://example.com/cat.jpg"
-          required
-          disabled={submitting}
-        />
-        <button type="submit" disabled={submitting || url.trim().length === 0}>
-          {submitting ? "Submitting…" : "Process image"}
-        </button>
-      </div>
-
-      <div className="size-note">
-        ⚠ Source images larger than <strong>{formatBytes(MAX_IMAGE_BYTES)}</strong> are rejected before processing.
-      </div>
-
-      {error && <div className="error">⚠ {error}</div>}
-
-      <div className="format-row">
-        <label className="select">
-          <span>Output format</span>
-          <select
-            value={transform.outputFormat}
-            onChange={(e) => updateTransform({ outputFormat: e.target.value as OutputFormat })}
-          >
-            <option value="original">Same as source</option>
-            <option value="png">PNG (lossless, supports transparency)</option>
-            <option value="jpeg">JPEG (smaller files)</option>
-            <option value="webp">WebP (modern, balanced)</option>
-          </select>
-        </label>
-        {(transform.outputFormat === "jpeg" || transform.outputFormat === "webp") && (
-          <Slider
-            label="Quality"
-            value={transform.quality}
-            onChange={(n) => updateTransform({ quality: n })}
-            min={1}
-            max={100}
+      {/* --- URL row (primary) --- */}
+      <div className="form-row">
+        <label htmlFor="job-url" className="form-label">Source image URL</label>
+        <div className="url-row">
+          <input
+            id="job-url"
+            type="url"
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            placeholder="https://example.com/cat.jpg"
+            required
+            disabled={submitting}
+            className="url-input"
           />
-        )}
+          <button type="submit" className="submit-btn" disabled={submitting || url.trim().length === 0}>
+            {submitting ? "Submitting…" : "Process image"}
+          </button>
+        </div>
+        <div className="size-note">
+          ⚠ Source images larger than <strong>{formatBytes(MAX_IMAGE_BYTES)}</strong> are rejected before processing.
+        </div>
+        {error && <div className="error">⚠ {error}</div>}
       </div>
 
+      {/* --- Output format (always visible, primary concern) --- */}
+      <div className="form-row">
+        <label className="form-label">Output format</label>
+        <div className="format-row">
+          <label className="select">
+            <select
+              value={transform.outputFormat}
+              onChange={(e) => updateTransform({ outputFormat: e.target.value as OutputFormat })}
+              className="format-select"
+            >
+              <option value="original">Same as source</option>
+              <option value="png">PNG (lossless, supports transparency)</option>
+              <option value="jpeg">JPEG (smaller files)</option>
+              <option value="webp">WebP (modern, balanced)</option>
+            </select>
+          </label>
+          {(transform.outputFormat === "jpeg" || transform.outputFormat === "webp") && (
+            <div className="quality-block">
+              <Slider
+                label="Quality"
+                value={transform.quality}
+                onChange={(n) => updateTransform({ quality: n })}
+                min={1}
+                max={100}
+              />
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* --- Advanced options toggle --- */}
       <button
         type="button"
         className="options-toggle"
         onClick={() => setShowOptions((v) => !v)}
       >
         {showOptions ? "▾ Hide" : "▸ Show"} processing options
+        {(transform.resize || transform.crop || transform.grayscale || transform.watermark ||
+          transform.rotation !== 0 || transform.flipHorizontal || transform.flipVertical ||
+          transform.opacity < 100) && (
+          <span className="options-active-dot">●</span>
+        )}
       </button>
 
       {showOptions && (
         <div className="options-body">
           <Section
             title="Resize"
-            open={openResize}
-            onToggle={() => setOpenResize((v) => !v)}
-            badge={transform.resize && transform.resize.mode !== "none" ? "active" : undefined}
+            open={openSection === "resize"}
+            onToggle={() => toggleSection("resize")}
+            badge={
+              transform.resize && transform.resize.mode !== "none"
+                ? resizeBadge(transform.resize)
+                : "off"
+            }
           >
             <ResizeSection
               value={
-                transform.resize ?? { mode: "fit", lockAspectRatio: true }
+                transform.resize ?? { mode: "none", lockAspectRatio: true }
               }
-              onChange={(v) => updateTransform({ resize: v })}
+              onChange={(v) => updateTransform({ resize: v.mode === "none" ? null : v })}
             />
           </Section>
 
           <Section
             title="Crop"
-            open={openCrop}
-            onToggle={() => setOpenCrop((v) => !v)}
-            badge={transform.crop ? "active" : undefined}
+            open={openSection === "crop"}
+            onToggle={() => toggleSection("crop")}
+            badge={transform.crop ? "on" : "off"}
           >
             <CropSection
               value={transform.crop ?? {}}
-              onChange={(v) => updateTransform({ crop: v })}
+              onChange={(v) => updateTransform({ crop: v.width || v.height || v.aspectRatio ? v : null })}
             />
           </Section>
 
           <Section
             title="Grayscale"
-            open={false}
-            onToggle={() => updateTransform({ grayscale: !transform.grayscale })}
-            badge={transform.grayscale ? "active" : "off"}
+            open={openSection === "grayscale"}
+            onToggle={() => {
+              updateTransform({ grayscale: !transform.grayscale });
+              setOpenSection((cur) => (cur === "grayscale" ? null : "grayscale"));
+            }}
+            badge={transform.grayscale ? "on" : "off"}
           >
-            <div className="row"><span>Convert the image to grayscale.</span></div>
+            <div className="row">
+              <span>Convert the image to grayscale.</span>
+            </div>
           </Section>
 
           <Section
             title="Watermark"
-            open={openWatermark}
-            onToggle={() => setOpenWatermark((v) => !v)}
-            badge={transform.watermark ? "active" : undefined}
+            open={openSection === "watermark"}
+            onToggle={() => toggleSection("watermark")}
+            badge={transform.watermark ? `${transform.watermark.kind} ${transform.watermark.position}` : "off"}
           >
             <WatermarkSection
               value={
@@ -205,11 +232,11 @@ export const JobForm = ({ apiUrl, onCreated }: JobFormProps): JSX.Element => {
 
           <Section
             title="Rotate & Flip"
-            open={openRotateFlip}
-            onToggle={() => setOpenRotateFlip((v) => !v)}
+            open={openSection === "rotate"}
+            onToggle={() => toggleSection("rotate")}
             badge={
               transform.rotation !== 0 || transform.flipHorizontal || transform.flipVertical
-                ? "active"
+                ? "on"
                 : "off"
             }
           >
@@ -218,8 +245,8 @@ export const JobForm = ({ apiUrl, onCreated }: JobFormProps): JSX.Element => {
 
           <Section
             title="Overall opacity"
-            open={openOpacity}
-            onToggle={() => setOpenOpacity((v) => !v)}
+            open={openSection === "opacity"}
+            onToggle={() => toggleSection("opacity")}
             badge={transform.opacity < 100 ? `${transform.opacity}%` : "100%"}
           >
             <Slider
@@ -231,7 +258,7 @@ export const JobForm = ({ apiUrl, onCreated }: JobFormProps): JSX.Element => {
               unit="%"
             />
             <div className="hint">
-              Applies a fade / alpha mask to the whole image (PNG keeps the alpha channel).
+              Fades the whole image. PNG keeps the alpha channel; JPEG/WebP darkens via blend.
             </div>
           </Section>
         </div>

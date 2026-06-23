@@ -225,6 +225,44 @@ describe("transformImage — watermark", () => {
     // Should still produce valid output (just visually faded).
     expect(result.bytes).toBeGreaterThan(0);
   });
+
+  it("places text watermark in each of the 9 positions without errors", async () => {
+    const input = await buildTestImage(800, 600);
+    const positions = [
+      "top-left", "top-center", "top-right",
+      "middle-left", "middle-center", "middle-right",
+      "bottom-left", "bottom-center", "bottom-right",
+    ] as const;
+    for (const position of positions) {
+      const result = await transformImage(input, {
+        ...DEFAULT_TRANSFORM,
+        watermark: { kind: "text", text: "Position " + position, position, margin: 20, opacity: 90, size: 32 },
+        resize: null,
+      });
+      // Each position should produce a valid output without throwing.
+      expect(result.bytes).toBeGreaterThan(0);
+      expect(result.width).toBe(800);
+      expect(result.height).toBe(600);
+    }
+  });
+
+  it("fails the watermark fetch when image URL is unreachable", async () => {
+    const input = await buildTestImage(600, 400);
+    await expect(
+      transformImage(input, {
+        ...DEFAULT_TRANSFORM,
+        watermark: {
+          kind: "image",
+          imageUrl: "http://127.0.0.1:1/does-not-exist.png",
+          position: "bottom-right",
+          margin: 20,
+          opacity: 80,
+          size: 100,
+        },
+        resize: null,
+      }),
+    ).rejects.toThrow(/Watermark image URL fetch failed/);
+  });
 });
 
 describe("transformImage — overall opacity", () => {

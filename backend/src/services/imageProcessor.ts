@@ -304,74 +304,72 @@ const buildWatermark = async (
   imageW: number,
   imageH: number,
 ): Promise<{ input: Buffer } | null> => {
-  // Apply margin to a base canvas the size of the underlying image. The
-  // `gravity` already positions it; we just need to render the overlay with
-  // the right size and opacity.
-  const safeText = (spec.text ?? "").replace(/[<>&]/g, "");
+  // The caller uses `gravity` to position the overlay on the destination
+  // image. The overlay itself only needs to be the size of the watermark,
+  // not the destination.
   const opacity = Math.max(0, Math.min(100, spec.opacity)) / 100;
   const size = Math.max(8, spec.size);
 
   if (spec.kind === "image" && spec.imageUrl) {
     try {
-      const res = await fetch(spec.imageUrl);
-      if (!res.ok) throw new Error(`watermark image fetch failed: ${res.status}`);
+      const res = await fetch(spec.imageUrl, {
+        headers: { "User-Agent": "image-processing-pipeline/1.0" },
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const contentType = res.headers.get("content-type") ?? "";
+      if (!contentType.startsWith("image/")) {
+        throw new Error(`Not an image (content-type=${contentType || "<empty>"})`);
+      }
       const buf = Buffer.from(await res.arrayBuffer());
-      // Resize the watermark image so its width is `size` px (height proportional).
+      if (buf.length === 0) throw new Error("Empty response body");
+
+      // Resize the watermark to `size` width, keep aspect ratio.
       const resized = await sharp(buf)
-        .resize({ width: size, withoutEnlargement: true })
-        .composite([
-          // Apply opacity by compositing over a transparent layer.
-          {
-            input: Buffer.from(
-              `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}">
-                <rect width="100%" height="100%" fill="rgba(0,0,0,0)" />
-              </svg>`,
-            ),
-            // Sharp's blend 'over' + alpha will apply when the overlay itself
-            // has alpha < 1.
-          },
-        ])
+        .resize({ width: size, withoutEnlargement: false })
         .png()
         .toBuffer();
-      // Apply opacity to the watermark by tweaking PNG metadata isn't possible
-      // pre-encode; instead, we layer a black overlay with composite at alpha
-      // by re-running through a pipeline with .composite + blend.
-      const faded = await sharp(resized)
-        .ensureAlpha()
-        .composite([
-          {
-            input: Buffer.from(
-              `<svg xmlns="http://www.w3.org/2000/svg" width="${imageW}" height="${imageH}">
-                <rect width="100%" height="100%" fill="black" fill-opacity="${1 - opacity}" />
-              </svg>`,
-            ),
-            blend: "dest-in",
-          },
-        ])
-        .toBuffer();
-      // Suppress unused-var warning for canvas size vars (they're used by the caller via gravity).
-      void imageW; void imageH;
-      return { input: faded };
+      const wmMeta = await sharp(resized).metadata();
+      const wmW = wmMeta.width ?? size;
+      const wmH = wmMeta.height ?? size;
+
+      // Apply per-watermark opacity via an alpha mask. dest-in keeps the
+      // destination (the resized watermark) where the mask has alpha. The
+      // mask is white at the requested opacity, so the result has the
+      // watermark's RGB but a scaled alpha channel.
+      let overlay = resized;
+      if (opacity < 1) {
+        const mask = Buffer.from(
+          `<svg xmlns="http://www.w3.org/2000/svg" width="${wmW}" height="${wmH}">
+             <rect width="100%" height="100%" fill="white" fill-opacity="${opacity}"/>
+           </svg>`,
+        );
+        overlay = await sharp(resized)
+          .ensureAlpha()
+          .composite([{ input: mask, blend: "dest-in" }])
+          .png()
+          .toBuffer();
+      }
+      return { input: overlay };
     } catch (err) {
-      // Fall through to a text placeholder if the image URL is unreachable.
-      // eslint-disable-next-line no-console
-      console.warn("[imageProcessor] watermark image fetch failed:", (err as Error).message);
-      if (safeText.length === 0) return null;
+      // Re-throw so the worker marks the job failed with a clear message.
+      throw new Error(
+        `Watermark image URL fetch failed: ${(err as Error).message}`,
+      );
     }
   }
 
+  const safeText = (spec.text ?? "").replace(/[<>&]/g, "");
   if (safeText.length === 0) return null;
 
-  // Render text watermark on an SVG that matches the image dimensions. The
-  // caller uses `gravity` to position it; we still apply opacity by compositing
-  // an alpha-fade overlay.
+  // Render a text watermark on an SVG the size of the destination image.
+  // `gravity` positions it; we apply opacity to the fill colors directly.
   const fontSize = size;
   const padding = Math.round(fontSize * 0.5);
   const svg = `
     <svg xmlns="http://www.w3.org/2000/svg" width="${imageW}" height="${imageH}">
       <style>
         .wm { font: ${fontSize}px sans-serif; fill: rgba(255,255,255,${opacity});
-              stroke: rgba(0,0,0,${opacity * 0.6}); stroke-width: 1; }
+              stroke: rgba(0,0,0,${Math.min(0.6, opacity * 0.6)}); stroke-width: 1; }
       </style>
       <rect x="0" y="${imageH - fontSize - padding * 2}"
             width="${imageW}" height="${fontSize + padding * 2}"
