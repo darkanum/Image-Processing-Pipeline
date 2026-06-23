@@ -19,14 +19,17 @@ COPY firestore.rules ./
 COPY storage.rules ./
 
 # Container-internal ports — these are mapped to host via docker-compose.
-EXPOSE 4000 8080 9099 9199
+EXPOSE 4000 4400 8080 9099 9199
 
 # Healthcheck on the emulator UI (it boots last).
 HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=10 \
   CMD wget -q -O- http://localhost:4000/ >/dev/null 2>&1 || exit 1
 
-# `firebase emulators:start --project demo-image-pipeline` runs all emulators.
-# `--project` lets the SDK connect with a fake project id.
+# IMPORTANT: host bindings are set in firebase.json (`emulators.*.host = 0.0.0.0`).
+# Without that, firebase-tools defaults to 127.0.0.1 inside the container, so
+# docker-compose host-port mappings (e.g. 4001:4000) refuse connections even
+# though the container itself is "healthy" (the healthcheck hits container
+# localhost, which still works).
 CMD ["firebase", "emulators:start", \
      "--project", "demo-image-pipeline", \
      "--config", "firebase.json"]
