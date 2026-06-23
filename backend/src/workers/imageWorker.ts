@@ -8,10 +8,11 @@ import {
   uploadResult,
 } from "../services/jobRepository.js";
 import { logger } from "../utils/logger.js";
-import type { ProgressUpdate } from "../types/job.js";
+import { DEFAULT_TRANSFORM, type ProgressUpdate, type TransformSpec } from "../types/job.js";
 
 interface JobPayload {
   url: string;
+  transform?: TransformSpec;
 }
 
 const STEPS = {
@@ -23,16 +24,14 @@ const STEPS = {
 
 const reportProgress = async (id: string, p: ProgressUpdate): Promise<void> => {
   await updateJobRecord(id, p);
-  // Also propagate to BullMQ progress so observers can see it too.
-  // (No return — we don't have the Job handle here.)
 };
 
 /**
  * Process a single image-processing job:
  *   1. download source
- *   2. transform (resize + grayscale + watermark)
+ *   2. transform (resize + crop + grayscale + watermark + rotate + flip + opacity + format)
  *   3. upload result to Firebase Storage
- *   4. mark completed (with progress=100, resultUrl populated)
+ *   4. mark completed
  *
  * On failure: mark failed with errorMessage; rethrow so BullMQ retries (up to N attempts).
  */
@@ -42,6 +41,10 @@ export const processImageJob = async (
 ): Promise<void> => {
   const id = String(job.id);
   const url = payload?.url;
+  const transform: TransformSpec = payload?.transform
+    ? { ...DEFAULT_TRANSFORM, ...payload.transform }
+    : DEFAULT_TRANSFORM;
+
   if (!url) {
     const msg = "Job payload missing 'url'";
     await markJobFailed(id, msg);
@@ -63,11 +66,9 @@ export const processImageJob = async (
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     await markJobFailed(id, message);
-    // Don't retry validation-style failures (bad URL, non-image, too large).
     const code = (err as Error & { code?: string }).code;
     const nonRetryable = code === "INVALID_URL" || code === "NOT_IMAGE" || code === "TOO_LARGE";
     if (nonRetryable) {
-      // Throw UnrecoverableError so BullMQ won't retry.
       throw new UnrecoverableError(message);
     }
     throw err;
@@ -86,12 +87,7 @@ export const processImageJob = async (
 
   let transformed;
   try {
-    transformed = await transformImage(downloaded.buffer, {
-      width: 800,
-      grayscale: true,
-      watermarkText: "Mavis Pipeline",
-      quality: 82,
-    });
+    transformed = await transformImage(downloaded.buffer, transform);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     await markJobFailed(id, `Transform failed: ${message}`);
@@ -120,7 +116,7 @@ export const processImageJob = async (
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     await markJobFailed(id, `Upload failed: ${message}`);
-    throw err; // retryable — transient Firebase / network failure
+    throw err;
   }
 
   // Step 4: completed
