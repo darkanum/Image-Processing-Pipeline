@@ -98,12 +98,15 @@ docker compose up --build
 
 Then open:
 
-- **Frontend (DEMO)**: <http://localhost:8000>
-- **Firebase emulator UI**: <http://localhost:4000>
-- **API health**: <http://localhost:3001/health>
+- **Frontend (DEMO)**: <http://localhost:8088>
+- **Firebase emulator UI**: <http://localhost:4001>
+- **API health**: <http://localhost:3100/health>
 
-The frontend is wired to talk to the API via host port 3001 and to the
-Firestore/Storage emulators via host ports 8080/9199.
+The full port map (host → container) lives at the top of `docker-compose.yml`.
+
+The frontend is wired to talk to the API via host port 3100 and to the
+Firestore/Storage emulators via host ports 8085/9200 (see `docker-compose.yml`
+for the full map).
 
 To stop and remove everything:
 
@@ -149,14 +152,15 @@ docker run --rm -p 6379:6379 redis:7-alpine
 # 2. Start Firebase emulators
 cd firebase
 docker build -t firebase-emulator .
-docker run --rm -p 4000:4000 -p 8080:8080 -p 9199:9199 -p 9099:9099 firebase-emulator
+docker run --rm -p 4001:4000 -p 8085:8080 -p 9200:9199 -p 9095:9099 firebase-emulator
 # Or: firebase emulators:start --project demo-image-pipeline --config firebase.json
 
 # 3. Backend API
 cd ../backend
 cp .env.example .env
+# .env defaults assume the docker port map (REDIS_HOST=127.0.0.1:6390 etc.)
 npm install
-npm run dev               # http://localhost:3001
+npm run dev               # http://localhost:3100
 
 # 4. Backend worker (separate terminal)
 npm run dev:worker

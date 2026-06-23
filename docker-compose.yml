@@ -2,17 +2,24 @@ name: image-processing-pipeline
 
 # All services in this stack:
 #   - redis            : BullMQ queue backend
-#   - firebase-emulator: Firestore + Storage + Auth emulators (UI on :4000)
+#   - firebase-emulator: Firestore + Storage + Auth emulators (UI on :4001)
 #   - api              : Express HTTP API
 #   - worker           : BullMQ worker that processes image jobs
 #   - frontend         : Vite-built React app served by nginx
 #
-# NOTE on host ports: many other apps commonly squat on 8080 (Nextcloud, Tomcat,
-# Jenkins, alternative HTTP frontends). If port 8080 is already in use, move
-# the Firestore emulator to another free host port and update both:
-#   - `firebase-emulator.ports` below
-#   - `frontend.args.VITE_FIRESTORE_EMULATOR_HOST` (browser-side, must match)
-# Container-internal 8080 stays the same so api/worker env vars are unchanged.
+# HOST PORT MAP (chosen to avoid clashes on a busy host):
+#   frontend     8088 -> 80
+#   api          3100 -> 3001
+#   firebase UI  4001 -> 4000
+#   firestore    8085 -> 8080
+#   auth         9095 -> 9099
+#   storage      9200 -> 9199
+#   redis        6390 -> 6379
+#
+# If you need to move these, change ONLY the host side (left of `->`) here
+# and `VITE_FIRESTORE_EMULATOR_HOST` / `VITE_FIREBASE_STORAGE_EMULATOR_HOST`
+# / `VITE_FIREBASE_AUTH_EMULATOR_HOST` build args on the frontend service.
+# Container-internal ports stay the same.
 
 services:
   redis:
@@ -20,7 +27,7 @@ services:
     container_name: pipeline-redis
     command: ["redis-server", "--appendonly", "yes", "--save", "60", "1"]
     ports:
-      - "6379:6379"
+      - "6390:6379"
     volumes:
       - redis-data:/data
     healthcheck:
@@ -35,10 +42,10 @@ services:
       context: ./firebase
     container_name: pipeline-firebase
     ports:
-      - "4000:4000"   # emulator UI
-      - "8081:8080"   # Firestore (host 8081 — avoid clashing with Nextcloud etc.)
-      - "9090:9099"   # Auth
-      - "9199:9199"   # Storage
+      - "4001:4000"   # emulator UI
+      - "8085:8080"   # Firestore
+      - "9095:9099"   # Auth
+      - "9200:9199"   # Storage
     healthcheck:
       test: ["CMD", "wget", "-q", "-O-", "http://localhost:4000/"]
       interval: 15s
@@ -64,7 +71,7 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: 6379
       FIREBASE_PROJECT_ID: demo-image-pipeline
-      # Container-to-container — use the service name; container port is 8080.
+      # Container-to-container — uses service name and container port (8080).
       FIRESTORE_EMULATOR_HOST: firebase-emulator:8080
       FIREBASE_STORAGE_EMULATOR_HOST: firebase-emulator:9199
       FIREBASE_AUTH_EMULATOR_HOST: firebase-emulator:9099
@@ -72,7 +79,7 @@ services:
       JOB_MAX_IMAGE_BYTES: 10485760
       JOB_DOWNLOAD_TIMEOUT_MS: 20000
     ports:
-      - "3001:3001"
+      - "3100:3001"
     restart: unless-stopped
 
   worker:
@@ -105,17 +112,18 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        VITE_API_URL: http://localhost:3001
+        # Browser-side URLs — host ports match the mappings above.
+        VITE_API_URL: http://localhost:3100
         VITE_FIREBASE_PROJECT_ID: demo-image-pipeline
         VITE_FIREBASE_API_KEY: demo-api-key
-        # Browser-side — these hit host ports, so 8081 (matches firebase mapping above).
-        VITE_FIRESTORE_EMULATOR_HOST: localhost:8081
-        VITE_FIREBASE_STORAGE_EMULATOR_HOST: localhost:9199
+        VITE_FIRESTORE_EMULATOR_HOST: localhost:8085
+        VITE_FIREBASE_STORAGE_EMULATOR_HOST: localhost:9200
+        VITE_FIREBASE_AUTH_EMULATOR_HOST: localhost:9095
     container_name: pipeline-frontend
     depends_on:
       - api
     ports:
-      - "8000:80"
+      - "8088:80"
     restart: unless-stopped
 
 volumes:
