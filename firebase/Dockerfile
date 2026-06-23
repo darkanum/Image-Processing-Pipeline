@@ -12,7 +12,11 @@ RUN apt-get update \
 RUN npm install -g firebase-tools@${FIREBASE_TOOLS_VERSION}
 
 WORKDIR /app
-COPY firebase ./firebase
+# Build context is already `./firebase` (set in docker-compose.yml),
+# so we copy the config files directly — no nested `firebase/` folder.
+COPY firebase.json ./
+COPY firestore.rules ./
+COPY storage.rules ./
 
 # Container-internal ports — these are mapped to host via docker-compose.
 EXPOSE 4000 8080 9099 9199
@@ -25,4 +29,4 @@ HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=10 \
 # `--project` lets the SDK connect with a fake project id.
 CMD ["firebase", "emulators:start", \
      "--project", "demo-image-pipeline", \
-     "--config", "firebase/firebase.json"]
+     "--config", "firebase.json"]
