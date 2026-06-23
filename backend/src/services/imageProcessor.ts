@@ -79,11 +79,22 @@ export const transformImage = async (
     pipeline = applyCrop(pipeline, spec.crop, preCropW, preCropH);
   }
 
-  // Step 7: watermark — built with POST-rotate-and-crop dimensions.
+  // Step 7: watermark — built with POST-rotate-and-crop dimensions. We
+  // compute the explicit (left, top) of the overlay from the 9-zone
+  // position + margin (Sharp's gravity-based composite has no built-in
+  // margin offset, so we do it manually).
   if (spec.watermark) {
     const overlay = await buildWatermark(spec.watermark, postCropW, postCropH);
     if (overlay) {
-      pipeline = pipeline.composite([{ ...overlay, gravity: mapWatermarkGravity(spec.watermark.position) }]);
+      const { left, top } = computeWatermarkPosition(
+        spec.watermark.position,
+        spec.watermark.margin,
+        postCropW,
+        postCropH,
+        overlay.width,
+        overlay.height,
+      );
+      pipeline = pipeline.composite([{ input: overlay.buffer, left, top }]);
     }
   }
 
@@ -283,30 +294,47 @@ const parseColor = (hex: string): { r: number; g: number; b: number; alpha: numb
 
 // --- Watermark helpers -----------------------------------------------------
 
-const mapWatermarkGravity = (
-  pos: WatermarkSpec["position"],
-): string => {
-  switch (pos) {
-    case "top-left": return "northwest";
-    case "top-center": return "north";
-    case "top-right": return "northeast";
-    case "middle-left": return "west";
-    case "middle-center": return "center";
-    case "middle-right": return "east";
-    case "bottom-left": return "southwest";
-    case "bottom-center": return "south";
-    case "bottom-right": return "southeast";
-  }
+interface WatermarkOverlay {
+  /** PNG buffer for the overlay. */
+  buffer: Buffer;
+  /** Actual width of the overlay in pixels (post-rendering). */
+  width: number;
+  /** Actual height of the overlay in pixels (post-rendering). */
+  height: number;
+}
+
+/** Compute the (left, top) where an overlay should be placed. */
+const computeWatermarkPosition = (
+  position: WatermarkSpec["position"],
+  margin: number,
+  destW: number,
+  destH: number,
+  wmW: number,
+  wmH: number,
+): { left: number; top: number } => {
+  const m = Math.max(0, Math.floor(margin));
+  const col = position.includes("left") ? 0 : position.includes("right") ? 2 : 1;
+  const row = position.includes("top") ? 0 : position.includes("bottom") ? 2 : 1;
+
+  // For left/right edges we anchor to the edge; for middle we center.
+  const left =
+    col === 0 ? m : col === 2 ? destW - wmW - m : Math.round((destW - wmW) / 2);
+  const top =
+    row === 0 ? m : row === 2 ? destH - wmH - m : Math.round((destH - wmH) / 2);
+
+  return { left: Math.max(0, left), top: Math.max(0, top) };
 };
 
+/**
+ * Render a watermark overlay (image or text) and return the rendered
+ * buffer with its actual dimensions. The caller is responsible for
+ * positioning via `left` / `top` in the composite call.
+ */
 const buildWatermark = async (
   spec: WatermarkSpec,
-  imageW: number,
-  imageH: number,
-): Promise<{ input: Buffer } | null> => {
-  // The caller uses `gravity` to position the overlay on the destination
-  // image. The overlay itself only needs to be the size of the watermark,
-  // not the destination.
+  _imageW: number,
+  _imageH: number,
+): Promise<WatermarkOverlay | null> => {
   const opacity = Math.max(0, Math.min(100, spec.opacity)) / 100;
   const size = Math.max(8, spec.size);
 
@@ -323,7 +351,6 @@ const buildWatermark = async (
       const buf = Buffer.from(await res.arrayBuffer());
       if (buf.length === 0) throw new Error("Empty response body");
 
-      // Resize the watermark to `size` width, keep aspect ratio.
       const resized = await sharp(buf)
         .resize({ width: size, withoutEnlargement: false })
         .png()
@@ -332,10 +359,6 @@ const buildWatermark = async (
       const wmW = wmMeta.width ?? size;
       const wmH = wmMeta.height ?? size;
 
-      // Apply per-watermark opacity via an alpha mask. dest-in keeps the
-      // destination (the resized watermark) where the mask has alpha. The
-      // mask is white at the requested opacity, so the result has the
-      // watermark's RGB but a scaled alpha channel.
       let overlay = resized;
       if (opacity < 1) {
         const mask = Buffer.from(
@@ -349,9 +372,8 @@ const buildWatermark = async (
           .png()
           .toBuffer();
       }
-      return { input: overlay };
+      return { buffer: overlay, width: wmW, height: wmH };
     } catch (err) {
-      // Re-throw so the worker marks the job failed with a clear message.
       throw new Error(
         `Watermark image URL fetch failed: ${(err as Error).message}`,
       );
@@ -361,22 +383,49 @@ const buildWatermark = async (
   const safeText = (spec.text ?? "").replace(/[<>&]/g, "");
   if (safeText.length === 0) return null;
 
-  // Render a text watermark on an SVG the size of the destination image.
-  // `gravity` positions it; we apply opacity to the fill colors directly.
+  // Render the text on a tight canvas. We let sharp compute the text
+  // dimensions so we can position the overlay exactly.
   const fontSize = size;
-  const padding = Math.round(fontSize * 0.5);
-  const svg = `
-    <svg xmlns="http://www.w3.org/2000/svg" width="${imageW}" height="${imageH}">
+  const fontFamily = "sans-serif";
+  const padding = Math.round(fontSize * 0.4);
+
+  // First render the text on a transparent canvas just big enough.
+  const textSvg = `
+    <svg xmlns="http://www.w3.org/2000/svg">
       <style>
-        .wm { font: ${fontSize}px sans-serif; fill: rgba(255,255,255,${opacity});
-              stroke: rgba(0,0,0,${Math.min(0.6, opacity * 0.6)}); stroke-width: 1; }
+        .wm { font: ${fontSize}px ${fontFamily}; fill: rgba(255,255,255,${opacity});
+              stroke: rgba(0,0,0,${Math.min(0.6, opacity * 0.6)}); stroke-width: 1;
+              paint-order: stroke; }
       </style>
-      <rect x="0" y="${imageH - fontSize - padding * 2}"
-            width="${imageW}" height="${fontSize + padding * 2}"
-            fill="rgba(0,0,0,${opacity * 0.35})"/>
-      <text class="wm" x="${padding}" y="${imageH - padding}">${safeText}</text>
+      <text class="wm" x="0" y="${fontSize}">${safeText}</text>
     </svg>`;
-  return { input: Buffer.from(svg) };
+  const textBuf = await sharp(Buffer.from(textSvg))
+    .png()
+    .toBuffer();
+  const textMeta = await sharp(textBuf).metadata();
+  const textW = textMeta.width ?? fontSize * safeText.length;
+  const textH = textMeta.height ?? fontSize + padding * 2;
+
+  // Compose with a dark backing rectangle for legibility, sized to fit the
+  // text + padding. This canvas's own dimensions become the overlay size
+  // so the caller can position it via left/top.
+  const backingW = textW + padding * 2;
+  const backingH = textH + padding;
+  const canvasW = Math.max(1, Math.round(backingW));
+  const canvasH = Math.max(1, Math.round(backingH));
+  const composed = await sharp({
+    create: {
+      width: canvasW,
+      height: canvasH,
+      channels: 4,
+      background: { r: 0, g: 0, b: 0, alpha: opacity * 0.4 },
+    },
+  })
+    .composite([{ input: textBuf, left: padding, top: Math.round(padding / 2) }])
+    .png()
+    .toBuffer();
+
+  return { buffer: composed, width: canvasW, height: canvasH };
 };
 
 // --- Opacity helper --------------------------------------------------------

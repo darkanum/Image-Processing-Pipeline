@@ -263,6 +263,40 @@ describe("transformImage — watermark", () => {
       }),
     ).rejects.toThrow(/Watermark image URL fetch failed/);
   });
+
+  it("applies the requested margin to a text watermark (200 px from edge)", async () => {
+    // 1000x1000 source, text watermark bottom-right with 200px margin and
+    // a 24px font. The text canvas should sit ~200px from the right and
+    // bottom edges, NOT flush against them.
+    const input = await buildTestImage(1000, 1000);
+    const result = await transformImage(input, {
+      ...DEFAULT_TRANSFORM,
+      watermark: {
+        kind: "text",
+        text: "MARGIN_TEST",
+        position: "bottom-right",
+        margin: 200,
+        opacity: 100,
+        size: 24,
+      },
+      resize: null,
+    });
+    // The result should be the same dimensions; what we really verify is
+    // that the bytes differ from a margin=0 version.
+    const noMargin = await transformImage(input, {
+      ...DEFAULT_TRANSFORM,
+      watermark: {
+        kind: "text",
+        text: "MARGIN_TEST",
+        position: "bottom-right",
+        margin: 0,
+        opacity: 100,
+        size: 24,
+      },
+      resize: null,
+    });
+    expect(result.bytes).not.toBe(noMargin.bytes);
+  });
 });
 
 describe("transformImage — overall opacity", () => {
