@@ -482,8 +482,12 @@ describe("transformImage — watermark background toggle", () => {
 });
 
 describe("transformImage — overall opacity", () => {
-  it("applies overall opacity to PNG output", async () => {
-    const input = await buildTestImage(400, 300);
+  it("applies 50% opacity to PNG output and produces a half-transparent image", async () => {
+    // Regression: previously the dest-in blend used a 1×1 SVG source which
+    // collapsed alpha to 0 (verified via minimal repro). The fix uses a
+    // full-canvas SVG matching the destination dimensions. The image
+    // content must still be present and the alpha must be ~128 (50% of 255).
+    const input = await buildTestImage(400, 300, { r: 255, g: 0, b: 0 });
     const result = await transformImage(input, {
       ...DEFAULT_TRANSFORM,
       opacity: 50,
@@ -491,17 +495,98 @@ describe("transformImage — overall opacity", () => {
       resize: null,
     });
     expect(result.format).toBe("png");
-    expect(result.bytes).toBeGreaterThan(0);
+    const meta = await sharp(result.buffer).metadata();
+    expect(meta.hasAlpha).toBe(true);
+    expect(meta.channels).toBe(4);
+
+    // Sample alpha across the image — most pixels should be near 128
+    // (50% of 255). Before the fix this returned 0 for all pixels.
+    const { data, info } = await sharp(result.buffer)
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    const alphas: number[] = [];
+    for (let i = 0; i < data.length; i += info.channels) {
+      alphas.push(data[i + info.channels - 1]);
+    }
+    const avg = alphas.reduce((a, b) => a + b, 0) / alphas.length;
+    // Allow some leeway for sharp's edge cases — expect somewhere in
+    // the 100-150 range (50% ± 10%).
+    expect(avg).toBeGreaterThan(100);
+    expect(avg).toBeLessThan(150);
   });
 
-  it("clamps opacity to 0..100", async () => {
-    const input = await buildTestImage(400, 300);
+  it("applies 25% opacity to PNG output and produces a quarter-transparent image", async () => {
+    const input = await buildTestImage(200, 150, { r: 0, g: 0, b: 255 });
+    const result = await transformImage(input, {
+      ...DEFAULT_TRANSFORM,
+      opacity: 25,
+      outputFormat: "png",
+      resize: null,
+    });
+    const { data, info } = await sharp(result.buffer)
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    let alphaSum = 0;
+    for (let i = 0; i < data.length; i += info.channels) {
+      alphaSum += data[i + info.channels - 1];
+    }
+    const avg = alphaSum / (info.width * info.height);
+    // 25% of 255 = 63.75. Allow 50-80.
+    expect(avg).toBeGreaterThan(50);
+    expect(avg).toBeLessThan(80);
+  });
+
+  it("100% opacity leaves the image fully opaque", async () => {
+    // At 100% opacity, applyOpacity returns the pipeline early without
+    // calling ensureAlpha(). For a 3-channel source (the test image is RGB),
+    // the output is also 3-channel. What we verify is that the image still
+    // round-trips with the expected color and no fade.
+    const input = await buildTestImage(100, 100, { r: 100, g: 200, b: 50 });
+    const result = await transformImage(input, {
+      ...DEFAULT_TRANSFORM,
+      opacity: 100,
+      outputFormat: "png",
+      resize: null,
+    });
+    const meta = await sharp(result.buffer).metadata();
+    const { data, info } = await sharp(result.buffer)
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    // No transparency should have been applied — sample a few pixels and
+    // verify the colors match the source (no darkening from a multiply blend).
+    let avgR = 0, avgG = 0, avgB = 0, count = 0;
+    for (let i = 0; i < data.length; i += info.channels) {
+      avgR += data[i];
+      avgG += data[i + 1];
+      avgB += data[i + 2];
+      count++;
+    }
+    expect(Math.round(avgR / count)).toBe(100);
+    expect(Math.round(avgG / count)).toBe(200);
+    expect(Math.round(avgB / count)).toBe(50);
+  });
+
+  it("clamps opacity > 100 to 100 (no fade applied)", async () => {
+    // 200 should be clamped to 100 — same as the 100% test above.
+    const input = await buildTestImage(100, 100, { r: 100, g: 200, b: 50 });
     const result = await transformImage(input, {
       ...DEFAULT_TRANSFORM,
       opacity: 200,
       resize: null,
     });
-    expect(result.bytes).toBeGreaterThan(0);
+    const { data, info } = await sharp(result.buffer)
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    let avgR = 0, avgG = 0, avgB = 0, count = 0;
+    for (let i = 0; i < data.length; i += info.channels) {
+      avgR += data[i];
+      avgG += data[i + 1];
+      avgB += data[i + 2];
+      count++;
+    }
+    expect(Math.round(avgR / count)).toBe(100);
+    expect(Math.round(avgG / count)).toBe(200);
+    expect(Math.round(avgB / count)).toBe(50);
   });
 });
 

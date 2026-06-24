@@ -8,6 +8,7 @@ import {
   MAX_IMAGE_BYTES,
 } from "../types/job";
 import { apiRequest, ApiError } from "../lib/api";
+import { ColorHexInput } from "./ColorHexInput";
 
 interface JobFormProps {
   apiUrl: string;
@@ -378,18 +379,11 @@ export const JobForm = ({ apiUrl: _apiUrl, onCreated }: JobFormProps): JSX.Eleme
                 onChange={(e) => handleResize({ padBackground: e.target.value })}
                 aria-label="Padding background color"
               />
-              <input
-                type="text"
+              <ColorHexInput
                 className="form-input color-hex"
                 value={r.padBackground ?? "#ffffff"}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  if (/^#[0-9a-fA-F]{0,6}$/.test(v)) {
-                    handleResize({ padBackground: v });
-                  }
-                }}
-                maxLength={7}
-                spellCheck={false}
+                onChange={(v) => handleResize({ padBackground: v })}
+                aria-label="Padding background hex"
               />
               <div className="pad-bg-presets">
                 {[
@@ -699,18 +693,11 @@ const WatermarkEditor = ({ value, onChange }: WatermarkEditorProps): JSX.Element
                   onChange={(e) => updateBg({ color: e.target.value })}
                   aria-label="Backing color"
                 />
-                <input
-                  type="text"
+                <ColorHexInput
                   className="form-input color-hex"
                   value={bg.color}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    if (/^#[0-9a-fA-F]{0,6}$/.test(v)) {
-                      updateBg({ color: v });
-                    }
-                  }}
-                  maxLength={7}
-                  spellCheck={false}
+                  onChange={(v) => updateBg({ color: v })}
+                  aria-label="Backing color hex"
                 />
                 <div className="pad-bg-presets">
                   {[

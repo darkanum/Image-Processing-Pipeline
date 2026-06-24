@@ -113,7 +113,7 @@ export const transformImage = async (
   // Step 7: overall opacity fade. Only PNG can carry alpha; for jpeg/webp we
   // approximate by multiplying RGB channels (visual fade).
   if (spec.opacity < 100) {
-    pipeline = applyOpacity(pipeline, spec.opacity, spec.outputFormat);
+    pipeline = applyOpacity(pipeline, spec.opacity, spec.outputFormat, postCropW, postCropH);
   }
 
   // Step 8: encode
@@ -295,10 +295,24 @@ const parseAspectRatio = (key: string): { w: number; h: number } => {
 };
 
 const parseColor = (hex: string): { r: number; g: number; b: number; alpha: number } => {
-  const m = /^#([0-9a-f]{6})$/i.exec(hex);
-  if (!m) return { r: 255, g: 255, b: 255, alpha: 1 };
-  const num = parseInt(m[1]!, 16);
-  return { r: (num >> 16) & 0xff, g: (num >> 8) & 0xff, b: num & 0xff, alpha: 1 };
+  // Accept 6-char hex (#rrggbb), 3-char hex (#rgb → expand to 6), and 8-char
+  // hex with alpha (#rrggbbaa — alpha is dropped here, callers use parseColor
+  // for solid backgrounds). Anything else falls back to white. Returning a
+  // parseable color even for partial input prevents the silent "user typed
+  // #abc but result is white" surprise.
+  const m6 = /^#([0-9a-f]{6})[0-9a-f]{0,2}$/i.exec(hex);
+  if (m6) {
+    const num = parseInt(m6[1]!, 16);
+    return { r: (num >> 16) & 0xff, g: (num >> 8) & 0xff, b: num & 0xff, alpha: 1 };
+  }
+  const m3 = /^#([0-9a-f])([0-9a-f])([0-9a-f])$/i.exec(hex);
+  if (m3) {
+    const r = parseInt(m3[1]! + m3[1]!, 16);
+    const g = parseInt(m3[2]! + m3[2]!, 16);
+    const b = parseInt(m3[3]! + m3[3]!, 16);
+    return { r, g, b, alpha: 1 };
+  }
+  return { r: 255, g: 255, b: 255, alpha: 1 };
 };
 
 // --- Watermark helpers -----------------------------------------------------
@@ -492,18 +506,30 @@ const applyOpacity = (
   pipeline: Sharp,
   opacityPct: number,
   outputFormat: TransformSpec["outputFormat"],
+  currentW: number,
+  currentH: number,
 ): Sharp => {
   const a = Math.max(0, Math.min(100, opacityPct)) / 100;
   if (a >= 1) return pipeline;
   // For PNG (or anything that supports alpha) we apply a global alpha fade by
-  // multiplying the alpha channel. For jpeg/webp we fake it with a multiply
-  // blend against black, which darkens proportionally.
+  // multiplying the alpha channel via a `dest-in` blend against a full-canvas
+  // white rect with the desired opacity. `dest-in` keeps the destination's
+  // pixels where the source is opaque — so when the source has uniform
+  // alpha `a` everywhere, the result's alpha is multiplied by `a`.
+  //
+  // NOTE: the SVG MUST match the destination's actual dimensions. A 1×1 SVG
+  // fails — sharp's compositing of a 1×1 source with `dest-in` collapses
+  // alpha to 0 for some reason (verified via minimal repro). Full-size SVGs
+  // give exactly the expected alpha (e.g. 0.5 → alpha=128).
+  //
+  // For jpeg/webp we fake transparency with a multiply blend against black
+  // (no alpha channel, so the only way to suggest "fading" is to darken).
   if (outputFormat === "png" || outputFormat === "original") {
     return pipeline.ensureAlpha().composite([
       {
         input: Buffer.from(
-          `<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1">
-            <rect width="1" height="1" fill="white" fill-opacity="${a}" />
+          `<svg xmlns="http://www.w3.org/2000/svg" width="${currentW}" height="${currentH}">
+            <rect width="100%" height="100%" fill="white" fill-opacity="${a}" />
           </svg>`,
         ),
         blend: "dest-in",
@@ -514,8 +540,8 @@ const applyOpacity = (
   return pipeline.composite([
     {
       input: Buffer.from(
-        `<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1">
-          <rect width="1" height="1" fill="black" fill-opacity="${1 - a}" />
+        `<svg xmlns="http://www.w3.org/2000/svg" width="${currentW}" height="${currentH}">
+          <rect width="100%" height="100%" fill="black" fill-opacity="${1 - a}" />
         </svg>`,
       ),
       blend: "multiply",

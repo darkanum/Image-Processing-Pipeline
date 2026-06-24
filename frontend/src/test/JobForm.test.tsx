@@ -102,11 +102,11 @@ describe("JobForm", () => {
   it("toggling the watermark backing hides the color pickers", () => {
     render(<JobForm apiUrl="" onCreated={undefined} />);
     fireEvent.click(screen.getByRole("checkbox", { name: /^watermark$/i }));
-    // Default backing is enabled → color picker present
-    expect(screen.getByLabelText(/backing color/i)).toBeTruthy();
+    // Default backing is enabled → the swatch picker is present
+    expect(screen.getByLabelText("Backing color")).toBeTruthy();
     // Toggle off
     fireEvent.click(screen.getByRole("checkbox", { name: /add backing rectangle/i }));
-    expect(screen.queryByLabelText(/backing color/i)).toBeNull();
+    expect(screen.queryByLabelText("Backing color")).toBeNull();
   });
 
   it("fit mode shows the pad background color picker", () => {
