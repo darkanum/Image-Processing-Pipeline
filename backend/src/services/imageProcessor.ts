@@ -388,8 +388,15 @@ const buildWatermark = async (
   const fontSize = size;
   const fontFamily = "sans-serif";
   const padding = Math.round(fontSize * 0.4);
+  // SVG text `y` is the baseline. Most fonts have descenders (g, p, y, j, q)
+  // that extend ~25% of fontSize below the baseline. Place the baseline low
+  // enough that descenders fit inside the text buffer with margin.
+  const descenderRoom = Math.round(fontSize * 0.3);
+  const baselineY = fontSize;
 
   // First render the text on a transparent canvas just big enough.
+  // Width comes from sharp's text-width measurement; height includes
+  // descender room so p/y/g are not clipped at the bottom.
   const textSvg = `
     <svg xmlns="http://www.w3.org/2000/svg">
       <style>
@@ -397,14 +404,16 @@ const buildWatermark = async (
               stroke: rgba(0,0,0,${Math.min(0.6, opacity * 0.6)}); stroke-width: 1;
               paint-order: stroke; }
       </style>
-      <text class="wm" x="0" y="${fontSize}">${safeText}</text>
+      <text class="wm" x="0" y="${baselineY}">${safeText}</text>
     </svg>`;
   const textBuf = await sharp(Buffer.from(textSvg))
     .png()
     .toBuffer();
   const textMeta = await sharp(textBuf).metadata();
   const textW = textMeta.width ?? fontSize * safeText.length;
-  const textH = textMeta.height ?? fontSize + padding * 2;
+  // Use the larger of sharp's measured height and baseline + descender room,
+  // so we never lose descenders even if libvips trims tight to glyph bounds.
+  const textH = Math.max(textMeta.height ?? 0, baselineY + descenderRoom);
 
   // Compose with a dark backing rectangle for legibility, sized to fit the
   // text + padding. This canvas's own dimensions become the overlay size
