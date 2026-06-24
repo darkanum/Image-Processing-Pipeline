@@ -30,8 +30,8 @@ horizontal scaling, real observability, and operational hygiene.
 
 ## Live DEMO
 
-[Frontend](https://imgp.dungeonbox.shop)
-[API](https://imgpapi.dungeonbox.shop/docs/)
+- [Frontend](https://imgp.dungeonbox.shop)
+- [API](https://imgpapi.dungeonbox.shop/docs/)
 
 ## Architecture
 
