@@ -1,0 +1,18 @@
+# Prometheus scrape config for the image-processing-pipeline stack.
+# - Scrapes the API's /metrics endpoint every 5s
+# - Targets use container DNS names (resolved by Docker's embedded DNS)
+
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+  external_labels:
+    stack: image-processing-pipeline
+
+scrape_configs:
+  - job_name: pipeline-api
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["pipeline-api:3001"]
+        labels:
+          service: api
+          component: http

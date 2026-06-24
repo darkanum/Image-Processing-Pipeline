@@ -2,19 +2,25 @@ name: image-processing-pipeline
 
 # All services in this stack:
 #   - redis            : BullMQ queue backend
+#   - redis-commander  : Web UI for browsing the Redis queue (BullMQ keys)
 #   - firebase-emulator: Firestore + Storage + Auth emulators (UI on :4001)
-#   - api              : Express HTTP API
+#   - api              : Express HTTP API (also exposes Prometheus /metrics)
 #   - worker           : BullMQ worker that processes image jobs
 #   - frontend         : Vite-built React app served by nginx
+#   - prometheus       : Scrapes the API /metrics endpoint every 5s
+#   - grafana          : Observability dashboard backed by Prometheus
 #
 # HOST PORT MAP (chosen to avoid clashes on a busy host):
-#   frontend     127.0.0.1:8088 -> 80
-#   api          127.0.0.1:3100 -> 3001
-#   firebase UI  127.0.0.1:4001 -> 4000
-#   firestore    127.0.0.1:8085 -> 8080
-#   auth         127.0.0.1:9095 -> 9099
-#   storage      127.0.0.1:9200 -> 9199
-#   redis        127.0.0.1:6390 -> 6379
+#   frontend         127.0.0.1:8088 -> 80
+#   api              127.0.0.1:3100 -> 3001
+#   firebase UI      127.0.0.1:4001 -> 4000
+#   firestore        127.0.0.1:8085 -> 8080
+#   auth             127.0.0.1:9095 -> 9099
+#   storage          127.0.0.1:9200 -> 9199
+#   redis            127.0.0.1:6390 -> 6379
+#   redis-commander  127.0.0.1:8081 -> 8081
+#   prometheus       127.0.0.1:9090 -> 9090
+#   grafana          127.0.0.1:3000 -> 3000  (default admin/admin)
 #
 # All host ports are bound to 127.0.0.1 (IPv4 only). Docker Desktop on
 # Windows has a known issue where IPv6 port forwarding hangs — the
@@ -184,5 +190,78 @@ services:
       - no-new-privileges:true
     mem_limit: 64m
 
+  # ── Observability: Redis UI, Prometheus, Grafana ──────────────────
+
+  redis-commander:
+    # Lightweight web UI for poking at the Redis queue — search keys
+    # (try `bull:image-processing:*`), inspect values, watch the queue
+    # drain in real time during a bulk submit. Runs with no auth in
+    # dev — the UI is bound to 127.0.0.1 only, so it's not reachable
+    # from outside the host.
+    image: rediscommander/redis-commander:latest
+    container_name: pipeline-redis-commander
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      REDIS_HOSTS: local:redis:6379
+    ports:
+      - "127.0.0.1:8081:8081"
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 128m
+
+  prometheus:
+    # Pulls the API's /metrics every 5s and stores them locally.
+    # Browse raw time-series at http://localhost:9090
+    image: prom/prometheus:v2.54.1
+    container_name: pipeline-prometheus
+    depends_on:
+      - api
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=7d"
+      - "--web.console.libraries=/usr/share/prometheus/console_libraries"
+      - "--web.console.templates=/usr/share/prometheus/consoles"
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+
+  grafana:
+    # Observability dashboard. Auto-provisions the Prometheus datasource
+    # and the Image Processing Pipeline dashboard on first start.
+    # Default login: admin / admin (you'll be asked to change it on
+    # first login).
+    image: grafana/grafana:11.2.0
+    container_name: pipeline-grafana
+    depends_on:
+      - prometheus
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: "Viewer"
+    volumes:
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/grafana/provisioning/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3000:3000"
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 256m
+
 volumes:
   redis-data:
+  prometheus-data:
+  grafana-data:
