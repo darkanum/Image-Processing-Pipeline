@@ -264,6 +264,29 @@ describe("transformImage — watermark", () => {
     ).rejects.toThrow(/Watermark image URL fetch failed/);
   });
 
+  it("scales text watermark down when the requested size is larger than the image", async () => {
+    // Regression: font size 51 on a 400x400 image produced a watermark canvas
+    // larger than the destination, which sharp refused to composite
+    // ("Image to composite must have same dimensions or smaller"). The
+    // transform should now scale the overlay down to fit instead of failing.
+    const input = await buildTestImage(400, 400);
+    const result = await transformImage(input, {
+      ...DEFAULT_TRANSFORM,
+      watermark: {
+        kind: "text",
+        text: "BIG WATERMARK 51",
+        position: "bottom-right",
+        margin: 30,
+        opacity: 90,
+        size: 51,
+      },
+      resize: null,
+    });
+    expect(result.width).toBe(400);
+    expect(result.height).toBe(400);
+    expect(result.bytes).toBeGreaterThan(0);
+  });
+
   it("does not clip descenders in text watermark (e.g. 'g', 'p', 'y')", async () => {
     // Regression: '© 2026 Portfolio' and 'g', 'p', 'y' descenders were being
     // cut off because the dark backing rectangle was too short.

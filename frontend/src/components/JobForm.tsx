@@ -20,6 +20,7 @@ const formatBytes = (bytes: number): string => {
 
 /** Compact badge describing what a resize spec produces. */
 const resizeBadge = (r: NonNullable<TransformSpec["resize"]>): string => {
+  if (r.mode === "none") return "off";
   if (r.preset) return r.preset.split(" (")[0]!;
   if (r.aspectRatio) return r.aspectRatio;
   if (r.width || r.height) return `${r.width ?? "?"}×${r.height ?? "?"}`;

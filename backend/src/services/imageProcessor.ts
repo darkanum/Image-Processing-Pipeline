@@ -84,8 +84,20 @@ export const transformImage = async (
   // position + margin (Sharp's gravity-based composite has no built-in
   // margin offset, so we do it manually).
   if (spec.watermark) {
-    const overlay = await buildWatermark(spec.watermark, postCropW, postCropH);
+    let overlay = await buildWatermark(spec.watermark, postCropW, postCropH);
     if (overlay) {
+      // Sharp refuses to composite an overlay that is larger than the
+      // destination in either dimension. If the user's font size / text
+      // length / margin makes the overlay bigger than the image, scale it
+      // down to fit. This keeps the watermark visible on small images
+      // instead of failing the whole job.
+      if (overlay.width > postCropW || overlay.height > postCropH) {
+        const scale = Math.min(postCropW / overlay.width, postCropH / overlay.height);
+        const newW = Math.max(1, Math.floor(overlay.width * scale));
+        const newH = Math.max(1, Math.floor(overlay.height * scale));
+        const resized = await sharp(overlay.buffer).resize(newW, newH).toBuffer();
+        overlay = { buffer: resized, width: newW, height: newH };
+      }
       const { left, top } = computeWatermarkPosition(
         spec.watermark.position,
         spec.watermark.margin,
