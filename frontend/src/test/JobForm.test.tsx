@@ -1,8 +1,13 @@
-import { describe, it, expect } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { JobForm } from "../components/JobForm";
 
 describe("JobForm", () => {
+  beforeEach(() => {
+    // reset fetch mock between tests
+    global.fetch = vi.fn();
+  });
+
   it("renders the URL input and the process button", () => {
     render(<JobForm apiUrl="" onCreated={undefined} />);
     expect(screen.getByLabelText(/image url/i)).toBeTruthy();
@@ -13,7 +18,6 @@ describe("JobForm", () => {
     render(<JobForm apiUrl="" onCreated={undefined} />);
     const input = screen.getByLabelText(/image url/i) as HTMLInputElement;
     fireEvent.change(input, { target: { value: "not a url" } });
-    // Validation line shows "✕" and a reason.
     expect(screen.getByText(/not a valid url/i)).toBeTruthy();
   });
 
@@ -38,7 +42,7 @@ describe("JobForm", () => {
     expect(input.value).toContain("picsum.photos");
   });
 
-  it("disables submit when URL is empty or invalid", () => {
+  it("disables submit when URL is empty", () => {
     render(<JobForm apiUrl="" onCreated={undefined} />);
     const input = screen.getByLabelText(/image url/i) as HTMLInputElement;
     const submit = screen.getByRole("button", { name: /process image/i }) as HTMLButtonElement;
@@ -48,11 +52,43 @@ describe("JobForm", () => {
     expect(submit.disabled).toBe(false);
   });
 
-  it("expands the options panel when the toggle is clicked", async () => {
+  it("shows the 4 resize mode radio buttons", () => {
     render(<JobForm apiUrl="" onCreated={undefined} />);
-    const toggle = screen.getByRole("button", { name: /transform options/i });
-    expect(toggle.getAttribute("aria-expanded")).toBe("false");
-    fireEvent.click(toggle);
-    await waitFor(() => expect(toggle.getAttribute("aria-expanded")).toBe("true"));
+    expect(screen.getByRole("radio", { name: /^off/i })).toBeTruthy();
+    expect(screen.getByRole("radio", { name: /^fit/i })).toBeTruthy();
+    expect(screen.getByRole("radio", { name: /^fill/i })).toBeTruthy();
+    expect(screen.getByRole("radio", { name: /^pad/i })).toBeTruthy();
+  });
+
+  it("clicking a resize mode toggles the size inputs", () => {
+    render(<JobForm apiUrl="" onCreated={undefined} />);
+    // Default is "Off" — width/height inputs should not be present.
+    expect(screen.queryByLabelText(/^width$/i)).toBeNull();
+    // Click Fit
+    fireEvent.click(screen.getByRole("radio", { name: /^fit/i }));
+    expect(screen.getByLabelText(/^width$/i)).toBeTruthy();
+    expect(screen.getByLabelText(/^height$/i)).toBeTruthy();
+  });
+
+  it("the watermark checkbox toggles the watermark section", () => {
+    render(<JobForm apiUrl="" onCreated={undefined} />);
+    const cb = screen.getByRole("checkbox", { name: /^watermark$/i });
+    // Default unchecked — text input not present
+    expect(screen.queryByPlaceholderText(/watermark text/i)).toBeNull();
+    // Toggle on
+    fireEvent.click(cb);
+    expect(screen.getByPlaceholderText(/watermark text/i)).toBeTruthy();
+    // Toggle off
+    fireEvent.click(cb);
+    expect(screen.queryByPlaceholderText(/watermark text/i)).toBeNull();
+  });
+
+  it("shows the live result dimensions in the resize header", () => {
+    render(<JobForm apiUrl="" onCreated={undefined} />);
+    // Default URL is https://picsum.photos/800/600, mode is Off → result = 800×600.
+    // The result lives in the resize header's <b> tag.
+    const result = screen.getByText(/Result:/);
+    expect(result.textContent).toContain("800");
+    expect(result.textContent).toContain("600");
   });
 });

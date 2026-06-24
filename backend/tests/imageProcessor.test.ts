@@ -86,14 +86,38 @@ describe("transformImage — basic happy path", () => {
 });
 
 describe("transformImage — resize modes", () => {
-  it("fit mode never enlarges images smaller than target", async () => {
-    const tiny = await buildTestImage(100, 80);
-    const result = await transformImage(tiny, {
+  it("fit mode produces the exact target dimensions (pads to fill)", async () => {
+    // Regression: a 600x600 source with target 1280x720 should produce
+    // 1280x720, not the original 600x600. The previous "withoutEnlargement"
+    // implementation silently skipped the resize when the source was smaller.
+    const input = await buildTestImage(600, 600);
+    const result = await transformImage(input, {
       ...DEFAULT_TRANSFORM,
-      resize: { mode: "fit", width: 800, lockAspectRatio: true },
+      resize: { mode: "fit", width: 1280, height: 720, lockAspectRatio: true },
     });
-    expect(result.width).toBe(100);
-    expect(result.height).toBe(80);
+    expect(result.width).toBe(1280);
+    expect(result.height).toBe(720);
+  });
+
+  it("fit mode scales down to fit when source is larger than target", async () => {
+    const input = await buildTestImage(1920, 1080);
+    const result = await transformImage(input, {
+      ...DEFAULT_TRANSFORM,
+      resize: { mode: "fit", width: 1280, height: 720, lockAspectRatio: true },
+    });
+    expect(result.width).toBe(1280);
+    expect(result.height).toBe(720);
+  });
+
+  it("fit mode with 800x500 target produces 800x500", async () => {
+    // User-reported: "fit 800x500 -> 600x500" was a bug.
+    const input = await buildTestImage(600, 500);
+    const result = await transformImage(input, {
+      ...DEFAULT_TRANSFORM,
+      resize: { mode: "fit", width: 800, height: 500, lockAspectRatio: false },
+    });
+    expect(result.width).toBe(800);
+    expect(result.height).toBe(500);
   });
 
   it("crop mode fills the requested box", async () => {
@@ -117,12 +141,14 @@ describe("transformImage — resize modes", () => {
     expect(result.bytes).toBeGreaterThan(0);
   });
 
-  it("lockAspectRatio derives height from width", async () => {
+  it("fit mode with only width set preserves aspect ratio", async () => {
     const input = await buildTestImage(1600, 1200);
     const result = await transformImage(input, {
       ...DEFAULT_TRANSFORM,
       resize: { mode: "fit", width: 800, lockAspectRatio: true },
     });
+    // 800x600 fits within the 800 width. With fit=contain, height is
+    // derived from width preserving aspect: 800 / (1600/1200) = 600.
     expect(result.width).toBe(800);
     expect(result.height).toBe(600);
   });

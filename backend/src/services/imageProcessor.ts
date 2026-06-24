@@ -157,21 +157,16 @@ const applyResize = (
   if (!resize || resize.mode === "none") return pipeline;
   const { width, height } = resolveResizeTarget(resize, srcW, srcH);
   // `cover` is used when both dimensions are explicit OR an aspect ratio was
-  // requested — Sharp will scale to fill the box and crop the excess so the
-  // output lands on the exact target aspect ratio. `inside` is used when only
-  // one dimension is set: Sharp preserves aspect ratio and fits within.
-  const fillBox = !!(resize.aspectRatio || (resize.width && resize.height));
-
+  // Mode semantics:
+  //   fit  — "fit" the image INTO the target box preserving aspect, then
+  //          pad to the exact target size (white background). Result is
+  //          always exactly the target dimensions.
+  //   crop — scale to COVER the target box and crop the overflow. Always
+  //          exactly the target dimensions.
+  //   pad  — same as fit, but with an explicit background color.
+  //   none — no resize (handled by caller, never reaches this function).
   switch (resize.mode) {
     case "fit":
-      return pipeline.resize({
-        width,
-        height,
-        fit: fillBox ? "cover" : "inside",
-        withoutEnlargement: true,
-      });
-    case "crop":
-      return pipeline.resize({ width, height, fit: "cover", position: "attention" });
     case "pad": {
       const bg = parseColor(resize.padBackground ?? "#ffffff");
       return pipeline.resize({
@@ -181,6 +176,8 @@ const applyResize = (
         background: bg,
       });
     }
+    case "crop":
+      return pipeline.resize({ width, height, fit: "cover", position: "attention" });
   }
 };
 

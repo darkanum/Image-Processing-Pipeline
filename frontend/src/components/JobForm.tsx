@@ -1,11 +1,6 @@
 import { useMemo, useState, type FormEvent } from "react";
-import type { OutputFormat, TransformSpec } from "../types/job";
+import type { OutputFormat, ResizeMode, TransformSpec } from "../types/job";
 import { DEFAULT_TRANSFORM, DEFAULT_RESIZE, DEFAULT_WATERMARK, MAX_IMAGE_BYTES } from "../types/job";
-import { ResizeSection } from "./ResizeSection";
-import { CropSection } from "./CropSection";
-import { WatermarkSection } from "./WatermarkSection";
-import { RotateFlipSection } from "./RotateFlipSection";
-import { Section, Slider } from "./controls";
 import { apiRequest, ApiError } from "../lib/api";
 
 interface JobFormProps {
@@ -18,27 +13,40 @@ const formatBytes = (bytes: number): string => {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 };
 
-/** Compact badge describing what a resize spec produces. */
-const resizeBadge = (r: NonNullable<TransformSpec["resize"]>): string => {
-  if (r.mode === "none") return "off";
-  if (r.preset) return r.preset.split(" (")[0]!;
-  if (r.aspectRatio) return r.aspectRatio;
-  if (r.width || r.height) return `${r.width ?? "?"}×${r.height ?? "?"}`;
-  return "on";
+/** Live dimension calculator. Returns the post-resize / post-rotate
+ * dimensions given the source and the current transform spec. Mirrors
+ * the backend's `resolveResizeTarget` + rotation math. */
+const computeResultDims = (
+  srcW: number,
+  srcH: number,
+  spec: TransformSpec,
+): { w: number; h: number; scale: number } => {
+  let w = srcW;
+  let h = srcH;
+  const r = spec.resize;
+  if (r && r.mode !== "none" && (r.width || r.height || r.aspectRatio)) {
+    if (r.width && r.height) {
+      w = r.width;
+      h = r.height;
+    } else if (r.width && !r.height && r.lockAspectRatio) {
+      h = Math.max(1, Math.round((r.width * srcH) / srcW));
+      w = r.width;
+    } else if (r.height && !r.width && r.lockAspectRatio) {
+      w = Math.max(1, Math.round((r.height * srcW) / srcH));
+      h = r.height;
+    } else if (r.width) {
+      w = r.width;
+    } else if (r.height) {
+      h = r.height;
+    }
+  }
+  if (spec.rotation === 90 || spec.rotation === 270) {
+    [w, h] = [h, w];
+  }
+  const scale = srcW > 0 ? w / srcW : 1;
+  return { w, h, scale };
 };
 
-/** A few quick-pick URLs that always work in the demo (no auth, no rate limit). */
-const QUICK_PICKS: { label: string; url: string }[] = [
-  { label: "Picsum 800×600", url: "https://picsum.photos/800/600" },
-  { label: "Picsum 1920×1080", url: "https://picsum.photos/1920/1080" },
-  { label: "Picsum 600×600", url: "https://picsum.photos/600/600" },
-];
-
-/**
- * Cheap pre-flight check on the URL — we don't want the user to wait 20s
- * for the worker to download a 404, only to find out the URL is wrong.
- * This catches the obvious cases; the worker still does the real check.
- */
 type UrlCheck = { kind: "idle" } | { kind: "ok"; host: string } | { kind: "warn"; reason: string } | { kind: "err"; reason: string };
 const checkUrl = (raw: string): UrlCheck => {
   const v = raw.trim();
@@ -52,7 +60,6 @@ const checkUrl = (raw: string): UrlCheck => {
   if (u.protocol !== "http:" && u.protocol !== "https:") {
     return { kind: "err", reason: `Protocol ${u.protocol.replace(":", "")} not allowed — use http(s)` };
   }
-  // Heuristics that catch the most common 404s without doing a real HEAD.
   const host = u.hostname;
   if (host === "" || host === "localhost" || host === "127.0.0.1" || host === "0.0.0.0") {
     return { kind: "warn", reason: "Localhost URL — only works if the worker can reach it" };
@@ -60,25 +67,90 @@ const checkUrl = (raw: string): UrlCheck => {
   return { kind: "ok", host };
 };
 
+const QUICK_PICKS: { label: string; url: string }[] = [
+  { label: "Picsum 800×600", url: "https://picsum.photos/800/600" },
+  { label: "Picsum 1920×1080", url: "https://picsum.photos/1920/1080" },
+  { label: "Picsum 600×600", url: "https://picsum.photos/600/600" },
+];
+
+const RESIZE_PRESETS: { label: string; w: number; h: number }[] = [
+  { label: "Custom", w: 0, h: 0 },
+  { label: "HD 720p", w: 1280, h: 720 },
+  { label: "FHD 1080p", w: 1920, h: 1080 },
+  { label: "4K UHD", w: 3840, h: 2160 },
+  { label: "Instagram Post", w: 1080, h: 1080 },
+  { label: "Instagram Story", w: 1080, h: 1920 },
+  { label: "Twitter Post", w: 1200, h: 675 },
+  { label: "Email banner", w: 600, h: 200 },
+];
+
+const RESIZE_MODES: { value: ResizeMode; label: string; hint: string }[] = [
+  { value: "none", label: "Off", hint: "No resize" },
+  { value: "fit", label: "Fit", hint: "Scale to fit, pad to exact" },
+  { value: "crop", label: "Fill", hint: "Scale to cover, crop overflow" },
+  { value: "pad", label: "Pad", hint: "Scale to fit, colored pad" },
+];
+
 export const JobForm = ({ apiUrl: _apiUrl, onCreated }: JobFormProps): JSX.Element => {
-  void _apiUrl; // apiBase() in lib/api handles this now
+  void _apiUrl;
   const [url, setUrl] = useState<string>("https://picsum.photos/800/600");
   const [transform, setTransform] = useState<TransformSpec>(DEFAULT_TRANSFORM);
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
-  const [showOptions, setShowOptions] = useState<boolean>(false);
   const [requestId, setRequestId] = useState<string | null>(null);
 
   const urlCheck = useMemo(() => checkUrl(url), [url]);
+
+  // Resolved resize — defaults to the current resize spec, or a fresh
+  // DEFAULT_RESIZE if null. We work on a concrete object so the inputs
+  // always have a value to read.
+  const r = transform.resize ?? DEFAULT_RESIZE;
 
   const setTransformPart = <K extends keyof TransformSpec>(key: K, value: TransformSpec[K]): void => {
     setTransform((prev) => ({ ...prev, [key]: value }));
   };
 
-  const buildPayload = (): { url: string; transform: TransformSpec } => ({
-    url: url.trim(),
-    transform,
-  });
+  const handleResize = (patch: Partial<typeof r>): void => {
+    setTransform((prev) => ({
+      ...prev,
+      resize: { ...(prev.resize ?? DEFAULT_RESIZE), ...patch },
+    }));
+  };
+
+  const handlePreset = (label: string): void => {
+    const preset = RESIZE_PRESETS.find((p) => p.label === label);
+    if (!preset) return;
+    if (preset.w === 0) {
+      // Custom — keep current width/height, just signal via mode.
+      handleResize({});
+      return;
+    }
+    handleResize({ width: preset.w, height: preset.h, lockAspectRatio: true });
+  };
+
+  const activePreset = RESIZE_PRESETS.find(
+    (p) => p.w === r.width && p.h === r.height,
+  )?.label ?? "Custom";
+
+  const setMode = (mode: ResizeMode): void => {
+    if (mode === "none") {
+      setTransform((prev) => ({ ...prev, resize: null }));
+    } else {
+      handleResize({ mode });
+    }
+  };
+
+  // Live preview of the source dimensions: try the URL, but for the
+  // initial default (picsum.photos/800/600) we know it's 800×600.
+  const sourceDims = useMemo<{ w: number; h: number }>(() => {
+    // Best-effort: only known Picsum URLs are predictable. Otherwise
+    // we show "?" and let the backend compute it.
+    const m = url.match(/^https?:\/\/picsum\.photos\/(\d+)(?:\/(\d+))?/);
+    if (m) return { w: Number(m[1]), h: Number(m[2] ?? m[1]) };
+    return { w: 0, h: 0 };
+  }, [url]);
+
+  const resultDims = computeResultDims(sourceDims.w, sourceDims.h, transform);
 
   const handleSubmit = async (e: FormEvent<HTMLFormElement>): Promise<void> => {
     e.preventDefault();
@@ -90,25 +162,20 @@ export const JobForm = ({ apiUrl: _apiUrl, onCreated }: JobFormProps): JSX.Eleme
     setRequestId(null);
     setSubmitting(true);
     try {
-      const payload = buildPayload();
-      const job = await apiRequest<{ id: string }>("/jobs", {
-        method: "POST",
-        body: payload,
-      });
+      const payload: { url: string; transform: TransformSpec } = {
+        url: url.trim(),
+        transform,
+      };
+      const job = await apiRequest<{ id: string }>("/jobs", { method: "POST", body: payload });
       onCreated?.(job);
       setUrl("");
     } catch (err) {
       if (err instanceof ApiError) {
         setRequestId(err.requestId ?? null);
-        // Friendlier messages for common cases.
         let message = err.message;
-        if (err.status === 401) {
-          message = "API key missing or invalid. The backend rejected the request.";
-        } else if (err.status === 429) {
-          message = "Rate limit hit. Wait a moment and try again.";
-        } else if (err.status >= 500) {
-          message = `Server error (${err.status}). The team has been notified.`;
-        }
+        if (err.status === 401) message = "API key missing or invalid. The backend rejected the request.";
+        else if (err.status === 429) message = "Rate limit hit. Wait a moment and try again.";
+        else if (err.status >= 500) message = `Server error (${err.status}). The team has been notified.`;
         setError(message);
       } else {
         setError(err instanceof Error ? err.message : String(err));
@@ -121,25 +188,34 @@ export const JobForm = ({ apiUrl: _apiUrl, onCreated }: JobFormProps): JSX.Eleme
   const submitDisabled = submitting || urlCheck.kind === "err" || url.trim() === "";
 
   return (
-    <form className="job-form" onSubmit={handleSubmit} noValidate>
-      <div className="form-row">
-        <label htmlFor="url-input" className="form-label">
-          Image URL
-        </label>
-        <input
-          id="url-input"
-          className="form-input"
-          type="url"
-          inputMode="url"
-          value={url}
-          onChange={(e) => setUrl(e.target.value)}
-          placeholder="https://example.com/image.jpg"
-          aria-describedby="url-help"
-          aria-invalid={urlCheck.kind === "err"}
-          autoComplete="off"
-          spellCheck={false}
-          required
-        />
+    <form className="job-form v2" onSubmit={handleSubmit} noValidate>
+      {/* ── Source URL ───────────────────────────────────────────────── */}
+      <div className="form-block">
+        <label className="form-label" htmlFor="url-input">Image URL</label>
+        <div className="url-row">
+          <input
+            id="url-input"
+            className="form-input"
+            type="url"
+            inputMode="url"
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            placeholder="https://example.com/image.jpg"
+            aria-describedby="url-help"
+            aria-invalid={urlCheck.kind === "err"}
+            autoComplete="off"
+            spellCheck={false}
+            required
+          />
+          <button
+            type="submit"
+            className="primary"
+            disabled={submitDisabled}
+            aria-busy={submitting}
+          >
+            {submitting ? "Submitting…" : "Process image"}
+          </button>
+        </div>
         <div id="url-help" className={`url-validation ${urlCheck.kind}`} aria-live="polite">
           {urlCheck.kind === "ok" && <>✓ Will fetch from {urlCheck.host}</>}
           {urlCheck.kind === "warn" && <>⚠ {urlCheck.reason}</>}
@@ -161,92 +237,206 @@ export const JobForm = ({ apiUrl: _apiUrl, onCreated }: JobFormProps): JSX.Eleme
         </div>
       </div>
 
-      <button
-        type="button"
-        className="toggle-options"
-        onClick={() => setShowOptions((v) => !v)}
-        aria-expanded={showOptions}
-        aria-controls="transform-options"
-      >
-        {showOptions ? "▾" : "▸"} Transform options{" "}
-        <span className="muted">
-          ({transform.outputFormat}, q{transform.quality}, {resizeBadge(transform.resize ?? DEFAULT_RESIZE)})
-        </span>
-      </button>
+      {/* ── Output format & quality ─────────────────────────────────── */}
+      <div className="form-block two-col">
+        <div className="form-field">
+          <label className="form-label" htmlFor="format-select">Format</label>
+          <select
+            id="format-select"
+            className="form-input"
+            value={transform.outputFormat}
+            onChange={(e) => setTransformPart("outputFormat", e.target.value as OutputFormat)}
+          >
+            <option value="original">Original</option>
+            <option value="jpeg">JPEG</option>
+            <option value="png">PNG</option>
+            <option value="webp">WebP</option>
+            <option value="avif">AVIF</option>
+          </select>
+        </div>
+        <SliderField
+          label={`Quality · ${transform.quality}`}
+          min={1}
+          max={100}
+          value={transform.quality}
+          onChange={(v) => setTransformPart("quality", v)}
+        />
+      </div>
 
-      {showOptions && (
-        <div id="transform-options" className="options-panel">
-          <Section title="Output" open onToggle={() => undefined}>
-            <div className="form-row">
-              <label htmlFor="format-select" className="form-label">Format</label>
-              <select
-                id="format-select"
-                className="form-input"
-                value={transform.outputFormat}
-                onChange={(e) => setTransformPart("outputFormat", e.target.value as OutputFormat)}
+      {/* ── Resize ───────────────────────────────────────────────────── */}
+      <div className="form-block">
+        <div className="form-block-head">
+          <span className="form-block-title">Resize</span>
+          <span className="form-block-aside">
+            {sourceDims.w > 0
+              ? <>Result: <b>{resultDims.w}×{resultDims.h}</b> <span className="muted">(from {sourceDims.w}×{sourceDims.h}, {Math.round(resultDims.scale * 100)}%)</span></>
+              : <span className="muted">Result will be computed when the job runs</span>}
+          </span>
+        </div>
+
+        <div className="mode-buttons" role="radiogroup" aria-label="Resize mode">
+          {RESIZE_MODES.map((m) => (
+            <button
+              key={m.value}
+              type="button"
+              role="radio"
+              aria-checked={r.mode === m.value}
+              className={`mode-btn ${r.mode === m.value ? "active" : ""}`}
+              onClick={() => setMode(m.value)}
+            >
+              <span className="mode-btn-label">{m.label}</span>
+              <span className="mode-btn-hint">{m.hint}</span>
+            </button>
+          ))}
+        </div>
+
+        {r.mode !== "none" && (
+          <div className="size-row">
+            <div className="size-inputs">
+              <div className="size-field">
+                <label htmlFor="resize-w">Width</label>
+                <input
+                  id="resize-w"
+                  className="form-input"
+                  type="number"
+                  min={1}
+                  max={20000}
+                  value={r.width ?? ""}
+                  onChange={(e) => {
+                    const n = e.target.value ? Number(e.target.value) : undefined;
+                    handleResize({ width: n });
+                  }}
+                  placeholder="auto"
+                />
+                <span className="suffix">px</span>
+              </div>
+              <button
+                type="button"
+                className={`link-btn ${r.lockAspectRatio ? "active" : ""}`}
+                onClick={() => handleResize({ lockAspectRatio: !r.lockAspectRatio })}
+                title={r.lockAspectRatio ? "Aspect locked — click to unlock" : "Aspect unlocked — click to lock"}
+                aria-pressed={r.lockAspectRatio}
               >
-                <option value="original">Original</option>
-                <option value="jpeg">JPEG</option>
-                <option value="png">PNG</option>
-                <option value="webp">WebP</option>
-                <option value="avif">AVIF</option>
+                {r.lockAspectRatio ? "🔗" : "⛓️‍💥"}
+              </button>
+              <div className="size-field">
+                <label htmlFor="resize-h">Height</label>
+                <input
+                  id="resize-h"
+                  className="form-input"
+                  type="number"
+                  min={1}
+                  max={20000}
+                  value={r.height ?? ""}
+                  onChange={(e) => {
+                    const n = e.target.value ? Number(e.target.value) : undefined;
+                    handleResize({ height: n });
+                  }}
+                  placeholder="auto"
+                />
+                <span className="suffix">px</span>
+              </div>
+            </div>
+            <div className="size-presets">
+              <label className="form-label-inline" htmlFor="resize-preset">Preset</label>
+              <select
+                id="resize-preset"
+                className="form-input"
+                value={activePreset}
+                onChange={(e) => handlePreset(e.target.value)}
+              >
+                {RESIZE_PRESETS.map((p) => (
+                  <option key={p.label} value={p.label}>{p.label}</option>
+                ))}
               </select>
             </div>
-            <Slider
-              label={`Quality (${transform.quality})`}
-              min={1}
-              max={100}
-              value={transform.quality}
-              onChange={(v) => setTransformPart("quality", v)}
-            />
-            <Slider
-              label={`Opacity (${transform.opacity}%)`}
-              min={1}
-              max={100}
-              value={transform.opacity}
-              onChange={(v) => setTransformPart("opacity", v)}
-            />
-          </Section>
+          </div>
+        )}
+      </div>
 
-          <ResizeSection
-            value={transform.resize ?? DEFAULT_RESIZE}
-            onChange={(v) => setTransformPart("resize", v)}
-          />
-          <CropSection
-            value={transform.crop ?? {}}
-            onChange={(v) => setTransformPart("crop", v)}
-          />
-          <WatermarkSection
-            value={transform.watermark ?? DEFAULT_WATERMARK}
+      {/* ── Watermark ────────────────────────────────────────────────── */}
+      <div className="form-block">
+        <div className="form-block-head">
+          <label className="form-block-toggle">
+            <input
+              type="checkbox"
+              checked={transform.watermark !== null}
+              onChange={(e) =>
+                setTransformPart("watermark", e.target.checked ? { ...DEFAULT_WATERMARK } : null)
+              }
+            />
+            <span>Watermark</span>
+          </label>
+          {transform.watermark && (
+            <span className="form-block-aside muted">drag the 3×3 grid to position</span>
+          )}
+        </div>
+
+        {transform.watermark && (
+          <WatermarkEditor
+            value={transform.watermark}
             onChange={(v) => setTransformPart("watermark", v)}
           />
-          <RotateFlipSection
-            transform={transform}
-            onChange={setTransform}
-          />
+        )}
+      </div>
 
-          <div className="misc-row">
-            <label className="form-checkbox">
-              <input
-                type="checkbox"
-                checked={transform.grayscale}
-                onChange={(e) => setTransformPart("grayscale", e.target.checked)}
-              />
-              Grayscale
-            </label>
+      {/* ── Adjust ───────────────────────────────────────────────────── */}
+      <div className="form-block">
+        <div className="form-block-head">
+          <span className="form-block-title">Adjust</span>
+        </div>
+        <div className="adjust-row">
+          <div className="adjust-field">
+            <span className="form-label">Rotate</span>
+            <div className="seg-buttons">
+              {[0, 90, 180, 270].map((deg) => (
+                <button
+                  key={deg}
+                  type="button"
+                  className={`seg-btn ${transform.rotation === deg ? "active" : ""}`}
+                  onClick={() => setTransformPart("rotation", deg as TransformSpec["rotation"])}
+                  aria-pressed={transform.rotation === deg}
+                >
+                  {deg}°
+                </button>
+              ))}
+            </div>
           </div>
-
-          <div className="muted small">
-            Max source size: {formatBytes(MAX_IMAGE_BYTES)} — larger payloads are
-            rejected at the API.
+          <div className="adjust-field">
+            <span className="form-label">Flip</span>
+            <div className="seg-buttons">
+              <button
+                type="button"
+                className={`seg-btn ${transform.flipHorizontal ? "active" : ""}`}
+                onClick={() => setTransformPart("flipHorizontal", !transform.flipHorizontal)}
+                aria-pressed={transform.flipHorizontal}
+              >
+                ⇆ H
+              </button>
+              <button
+                type="button"
+                className={`seg-btn ${transform.flipVertical ? "active" : ""}`}
+                onClick={() => setTransformPart("flipVertical", !transform.flipVertical)}
+                aria-pressed={transform.flipVertical}
+              >
+                ⇅ V
+              </button>
+            </div>
+          </div>
+          <div className="adjust-field">
+            <span className="form-label">Color</span>
+            <div className="seg-buttons">
+              <button
+                type="button"
+                className={`seg-btn ${transform.grayscale ? "active" : ""}`}
+                onClick={() => setTransformPart("grayscale", !transform.grayscale)}
+                aria-pressed={transform.grayscale}
+              >
+                {transform.grayscale ? "B&W" : "Color"}
+              </button>
+            </div>
           </div>
         </div>
-      )}
-
-      <div className="form-actions">
-        <button type="submit" className="primary" disabled={submitDisabled} aria-busy={submitting}>
-          {submitting ? "Submitting…" : "Process image"}
-        </button>
       </div>
 
       {error && (
@@ -257,6 +447,146 @@ export const JobForm = ({ apiUrl: _apiUrl, onCreated }: JobFormProps): JSX.Eleme
           )}
         </div>
       )}
+
+      <div className="muted small form-footer-note">
+        Max source size: {formatBytes(MAX_IMAGE_BYTES)} — larger payloads are
+        rejected at the API. Results expire after 24h.
+      </div>
     </form>
+  );
+};
+
+// ── Local sub-components (kept in this file for cohesion) ─────────────
+
+interface SliderFieldProps {
+  label: string;
+  min: number;
+  max: number;
+  value: number;
+  onChange: (v: number) => void;
+}
+
+const SliderField = ({ label, min, max, value, onChange }: SliderFieldProps): JSX.Element => (
+  <div className="form-field">
+    <label className="form-label">{label}</label>
+    <input
+      className="form-input slider"
+      type="range"
+      min={min}
+      max={max}
+      value={value}
+      onChange={(e) => onChange(Number(e.target.value))}
+    />
+  </div>
+);
+
+interface WatermarkEditorProps {
+  value: NonNullable<TransformSpec["watermark"]>;
+  onChange: (next: NonNullable<TransformSpec["watermark"]>) => void;
+}
+
+const POSITIONS: { key: string; label: string }[] = [
+  { key: "top-left", label: "↖" }, { key: "top-center", label: "↑" }, { key: "top-right", label: "↗" },
+  { key: "middle-left", label: "←" }, { key: "middle-center", label: "·" }, { key: "middle-right", label: "→" },
+  { key: "bottom-left", label: "↙" }, { key: "bottom-center", label: "↓" }, { key: "bottom-right", label: "↘" },
+];
+
+const WatermarkEditor = ({ value, onChange }: WatermarkEditorProps): JSX.Element => {
+  const update = (patch: Partial<typeof value>): void => {
+    onChange({ ...value, ...patch });
+  };
+  return (
+    <div className="wm-editor">
+      <div className="wm-type-tabs">
+        <button
+          type="button"
+          className={`seg-btn ${value.kind === "text" ? "active" : ""}`}
+          onClick={() => update({ kind: "text" })}
+          aria-pressed={value.kind === "text"}
+        >
+          Text
+        </button>
+        <button
+          type="button"
+          className={`seg-btn ${value.kind === "image" ? "active" : ""}`}
+          onClick={() => update({ kind: "image" })}
+          aria-pressed={value.kind === "image"}
+        >
+          Image URL
+        </button>
+      </div>
+      {value.kind === "text" ? (
+        <input
+          className="form-input"
+          type="text"
+          value={value.text ?? ""}
+          onChange={(e) => update({ text: e.target.value })}
+          placeholder="Watermark text"
+          maxLength={512}
+        />
+      ) : (
+        <input
+          className="form-input"
+          type="url"
+          value={value.imageUrl ?? ""}
+          onChange={(e) => update({ imageUrl: e.target.value })}
+          placeholder="https://example.com/logo.png"
+        />
+      )}
+
+      <div className="wm-position-picker" role="radiogroup" aria-label="Watermark position">
+        {POSITIONS.map((p) => (
+          <button
+            key={p.key}
+            type="button"
+            role="radio"
+            aria-checked={value.position === p.key}
+            className={`wm-cell ${value.position === p.key ? "active" : ""}`}
+            onClick={() => update({ position: p.key as typeof value.position })}
+            title={p.key}
+          >
+            {p.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="wm-sliders">
+        <div className="form-field">
+          <label className="form-label">Margin · {value.margin}px</label>
+          <input
+            className="form-input slider"
+            type="range"
+            min={0}
+            max={500}
+            value={value.margin}
+            onChange={(e) => update({ margin: Number(e.target.value) })}
+          />
+        </div>
+        <div className="form-field">
+          <label className="form-label">
+            {value.kind === "text" ? "Font size" : "Image width"} · {value.size}px
+          </label>
+          <input
+            className="form-input slider"
+            type="range"
+            min={value.kind === "text" ? 8 : 24}
+            max={value.kind === "text" ? 200 : 2000}
+            value={value.size}
+            onChange={(e) => update({ size: Number(e.target.value) })}
+          />
+        </div>
+        <div className="form-field">
+          <label className="form-label">Opacity · {value.opacity}%</label>
+          <input
+            className="form-input slider"
+            type="range"
+            min={0}
+            max={100}
+            value={value.opacity}
+            onChange={(e) => update({ opacity: Number(e.target.value) })}
+          />
+        </div>
+      </div>
+    </div>
   );
 };
