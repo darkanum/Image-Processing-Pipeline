@@ -383,45 +383,39 @@ const buildWatermark = async (
   const safeText = (spec.text ?? "").replace(/[<>&]/g, "");
   if (safeText.length === 0) return null;
 
-  // Render the text on a tight canvas. We let sharp compute the text
-  // dimensions so we can position the overlay exactly.
   const fontSize = size;
   const fontFamily = "sans-serif";
-  const padding = Math.round(fontSize * 0.4);
-  // SVG text `y` is the baseline. Most fonts have descenders (g, p, y, j, q)
-  // that extend ~25% of fontSize below the baseline. Place the baseline low
-  // enough that descenders fit inside the text buffer with margin.
-  const descenderRoom = Math.round(fontSize * 0.3);
-  const baselineY = fontSize;
+  // No `sharp.metadata().width` measurement — that returns the *tight* glyph
+  // bounding box and was clipping both the last character (right edge) and
+  // descenders (bottom edge). Instead, allocate a fixed-size canvas with
+  // generous safe-space for the full character cell (cap + descender) and
+  // any anti-aliasing fringe on the right. The text is rendered inside the
+  // canvas with the same safe padding, so no measurement is needed.
+  const charCellW = fontSize * 0.65; // average char width incl. tracking
+  const textRunW = Math.ceil(safeText.length * charCellW);
+  const padX = Math.round(fontSize * 0.5);
+  const padY = Math.round(fontSize * 0.4);
+  const baselineY = Math.round(fontSize * 0.85); // baseline ~85% down the cell
+  const canvasW = textRunW + padX * 2;
+  // Cell height: cap height + descender + stroke room.
+  const cellH = Math.round(fontSize * 1.35);
+  const canvasH = cellH + padY * 2;
 
-  // First render the text on a transparent canvas just big enough.
-  // Width comes from sharp's text-width measurement; height includes
-  // descender room so p/y/g are not clipped at the bottom.
   const textSvg = `
-    <svg xmlns="http://www.w3.org/2000/svg">
+    <svg xmlns="http://www.w3.org/2000/svg" width="${canvasW}" height="${canvasH}">
       <style>
         .wm { font: ${fontSize}px ${fontFamily}; fill: rgba(255,255,255,${opacity});
               stroke: rgba(0,0,0,${Math.min(0.6, opacity * 0.6)}); stroke-width: 1;
               paint-order: stroke; }
       </style>
-      <text class="wm" x="0" y="${baselineY}">${safeText}</text>
+      <text class="wm" x="${padX}" y="${padY + baselineY}">${safeText}</text>
     </svg>`;
   const textBuf = await sharp(Buffer.from(textSvg))
     .png()
     .toBuffer();
-  const textMeta = await sharp(textBuf).metadata();
-  const textW = textMeta.width ?? fontSize * safeText.length;
-  // Use the larger of sharp's measured height and baseline + descender room,
-  // so we never lose descenders even if libvips trims tight to glyph bounds.
-  const textH = Math.max(textMeta.height ?? 0, baselineY + descenderRoom);
 
-  // Compose with a dark backing rectangle for legibility, sized to fit the
-  // text + padding. This canvas's own dimensions become the overlay size
-  // so the caller can position it via left/top.
-  const backingW = textW + padding * 2;
-  const backingH = textH + padding;
-  const canvasW = Math.max(1, Math.round(backingW));
-  const canvasH = Math.max(1, Math.round(backingH));
+  // Compose with a dark backing rectangle for legibility, sized to the
+  // known canvas dimensions (no measurement-based sizing).
   const composed = await sharp({
     create: {
       width: canvasW,
@@ -430,7 +424,7 @@ const buildWatermark = async (
       background: { r: 0, g: 0, b: 0, alpha: opacity * 0.4 },
     },
   })
-    .composite([{ input: textBuf, left: padding, top: Math.round(padding / 2) }])
+    .composite([{ input: textBuf, left: 0, top: 0 }])
     .png()
     .toBuffer();
 
