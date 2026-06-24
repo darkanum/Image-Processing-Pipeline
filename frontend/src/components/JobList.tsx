@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback } from "react";
+import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { collection, onSnapshot, orderBy, query, limit } from "firebase/firestore";
 import { getDb } from "../lib/firebase";
 import type { JobRecord, JobStatus } from "../types/job";
@@ -43,12 +43,17 @@ export const JobList = ({ refreshSignal: _refreshSignal, onJobCreated }: JobList
   const { jobs, loading, error, refresh } = useJobsLite(MAX_JOBS);
   const [tab, setTab] = useState<TabKey>("queue");
 
-  // Auto-switch to a more interesting tab when the user lands on a tab
-  // with no jobs. The most useful heuristic: if there are running jobs,
-  // show them; otherwise show the most recent (completed or failed).
+  // Auto-jump to the most interesting tab only ONCE, on the very first
+  // snapshot. We track this with a ref so the effect doesn't re-fire on
+  // every Firestore update. Important: this MUST NOT run on user clicks
+  // — once the user has picked a tab, stay there.
+  const autoSwitchedRef = useRef(false);
   useEffect(() => {
+    if (autoSwitchedRef.current) return;
     if (loading) return;
     if (jobs.length === 0) return;
+    autoSwitchedRef.current = true;
+    // If the default "queue" tab is empty, jump to a tab that has content.
     const counts = {
       queue: 0,
       executing: 0,
@@ -59,12 +64,11 @@ export const JobList = ({ refreshSignal: _refreshSignal, onJobCreated }: JobList
       const t = TABS.find((tDef) => tDef.match(j.status));
       if (t) counts[t.key] += 1;
     }
-    if (counts[tab] > 0) return;
+    if (counts.queue > 0) return;
     if (counts.executing > 0) setTab("executing");
     else if (counts.completed > 0) setTab("completed");
     else if (counts.failed > 0) setTab("failed");
-    // don't auto-switch to queue when nothing is in it
-  }, [jobs, loading, tab]);
+  }, [jobs, loading]);
 
   const grouped = useMemo(() => {
     const buckets: Record<TabKey, JobRecord[]> = {
