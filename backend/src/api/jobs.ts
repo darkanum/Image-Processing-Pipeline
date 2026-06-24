@@ -10,70 +10,27 @@ import { logger } from "../utils/logger.js";
 import { jobsEnqueuedTotal } from "../observability/metrics.js";
 import { apiError } from "../middleware/errorHandler.js";
 import { DEFAULT_TRANSFORM, type JobRecord, type TransformSpec } from "../types/job.js";
+import { createJobRequestSchema } from "./openapi.js";
 
-const watermarkPosition = z.enum([
-  "top-left", "top-center", "top-right",
-  "middle-left", "middle-center", "middle-right",
-  "bottom-left", "bottom-center", "bottom-right",
-]);
+/** Re-export the schemas so existing tests / external imports still work. */
+export { createJobRequestSchema } from "./openapi.js";
 
-const watermarkSchema = z.object({
-  kind: z.enum(["text", "image"]),
-  text: z.string().max(512).optional(),
-  imageUrl: z.string().url().max(2048).optional(),
-  position: watermarkPosition,
-  margin: z.number().int().min(0).max(500),
-  opacity: z.number().int().min(0).max(100),
-  size: z.number().int().min(8).max(2000),
-});
-
-const resizeSchema = z.object({
-  mode: z.enum(["fit", "crop", "pad", "none"]),
-  width: z.number().int().positive().max(20000).optional(),
-  height: z.number().int().positive().max(20000).optional(),
-  lockAspectRatio: z.boolean(),
-  preset: z.string().max(64).optional(),
-  aspectRatio: z.string().regex(/^\d+:\d+$/).optional(),
-  padBackground: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
-});
-
-const cropSchema = z.object({
-  aspectRatio: z.string().regex(/^\d+:\d+$/).optional(),
-  width: z.number().int().positive().max(20000).optional(),
-  height: z.number().int().positive().max(20000).optional(),
-  anchor: z.enum(["center", "top", "bottom", "left", "right", "attention"]).optional(),
-});
-
-const transformSchema = z.object({
-  outputFormat: z.enum(["png", "jpeg", "webp", "original"]).default("original"),
-  quality: z.number().int().min(1).max(100).default(82),
-  resize: resizeSchema.nullable().default(null),
-  crop: cropSchema.nullable().default(null),
-  grayscale: z.boolean().default(false),
-  watermark: watermarkSchema.nullable().default(null),
-  rotation: z.union([z.literal(0), z.literal(90), z.literal(180), z.literal(270)]).default(0),
-  flipHorizontal: z.boolean().default(false),
-  flipVertical: z.boolean().default(false),
-  opacity: z.number().int().min(0).max(100).default(100),
-});
-
-const createJobSchema = z.object({
-  url: z
-    .string()
-    .url()
-    .max(2048)
-    .refine(
-      (u) => {
-        try {
-          const p = new URL(u);
-          return p.protocol === "http:" || p.protocol === "https:";
-        } catch {
-          return false;
-        }
-      },
-      { message: "url must be http(s)" },
-    ),
-  transform: transformSchema.optional(),
+/** Local validation extends the shared request schema with a runtime
+ *  check on the URL protocol. The OpenAPI `format: uri` already implies
+ *  http(s) but zod's `.url()` accepts ftp:// and friends, so we add
+ *  the protocol guard here. */
+const createJobSchema = createJobRequestSchema.extend({
+  url: createJobRequestSchema.shape.url.refine(
+    (u) => {
+      try {
+        const p = new URL(u);
+        return p.protocol === "http:" || p.protocol === "https:";
+      } catch {
+        return false;
+      }
+    },
+    { message: "url must be http(s)" },
+  ),
 });
 
 export const jobsRouter = Router();
