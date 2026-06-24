@@ -9,8 +9,10 @@ const JobList = lazy(() =>
   import("./components/JobList").then((m) => ({ default: m.JobList })),
 );
 
-const API_URL =
-  (import.meta.env.VITE_API_URL as string | undefined) ?? "/api";
+const API_DISPLAY =
+  (import.meta.env.VITE_API_URL as string | undefined)
+    ? `${import.meta.env.VITE_API_URL}/api`
+    : "/api";
 
 const App = (): JSX.Element => {
   const [refreshSignal, setRefreshSignal] = useState<number>(0);
@@ -34,7 +36,7 @@ const App = (): JSX.Element => {
         </div>
         <div className="header-meta">
           <HealthIndicator />
-          <span className="api-line">API: <code>{API_URL}</code></span>
+          <span className="api-line">API: <code>{API_DISPLAY}</code></span>
         </div>
       </header>
 
@@ -42,7 +44,7 @@ const App = (): JSX.Element => {
         <section className="card" aria-labelledby="submit-heading">
           <h2 id="submit-heading">Submit URL</h2>
           <JobForm
-            apiUrl={API_URL === "/api" ? "" : API_URL}
+            apiUrl={API_DISPLAY === "/api" ? "" : API_DISPLAY}
             onCreated={() => setRefreshSignal((n) => n + 1)}
           />
         </section>

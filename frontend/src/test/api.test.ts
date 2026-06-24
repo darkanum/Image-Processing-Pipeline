@@ -16,6 +16,15 @@ describe("apiRequest", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("prefixes the path with /api (the Express mount point)", async () => {
+    global.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "content-type": "application/json" } }),
+    ) as unknown as typeof fetch;
+    await apiRequest("/jobs", { method: "GET" });
+    const callUrl = (global.fetch as ReturnType<typeof vi.fn>).mock.calls[0]![0] as string;
+    expect(callUrl).toMatch(/\/api\/jobs$/);
+  });
+
   it("throws ApiError with status + body on 4xx", async () => {
     const mockFetch = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ error: "nope", requestId: "abc" }), {
