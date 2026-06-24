@@ -47,7 +47,7 @@ describe("ColorHexInput", () => {
 
   it("snaps back to parent value on blur if the draft is invalid", () => {
     const onChange = vi.fn();
-    const { rerender } = render(
+    render(
       <ColorHexInput value="#ff0000" onChange={onChange} aria-label="Color" />,
     );
     const input = screen.getByLabelText("Color") as HTMLInputElement;
