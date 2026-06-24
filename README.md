@@ -131,9 +131,12 @@ horizontal scaling, real observability, and operational hygiene.
 docker compose up --build
 
 # 2. Open the app
-#    Frontend:  http://localhost:8088
-#    API:       http://localhost:3100
-#    Firebase:  http://localhost:4001  (UI for browsing Firestore/Storage)
+#    Frontend:           http://localhost:8088
+#    API:                http://localhost:3100
+#    Firebase UI:        http://localhost:4001  (Firestore + Storage browser)
+#    Grafana:            http://localhost:3000  (admin/admin — observability dashboard)
+#    Prometheus:         http://localhost:9090  (raw time-series)
+#    Redis Commander:    http://localhost:8081  (browse the BullMQ queue)
 ```
 
 The first build takes a few minutes (libvips is compiled). Subsequent rebuilds
@@ -271,6 +274,20 @@ values fail fast at boot.
 ---
 
 ## Operations
+
+### Observability stack (Grafana + Prometheus + Redis Commander)
+
+The stack ships with three extra services wired up out of the box:
+
+| Service | URL | What it is |
+|---|---|---|
+| **Grafana** | http://localhost:3000 (admin/admin) | Pre-built dashboard: API req/s, error rate, latency p50/p95/p99, top routes, job enqueued/completed/active, processing duration, bytes processed, memory, CPU, event-loop lag |
+| **Prometheus** | http://localhost:9090 | Raw time-series DB. Scrape target `pipeline-api:3001/metrics` every 5s, 7-day retention |
+| **Redis Commander** | http://localhost:8081 | Browse the BullMQ keys (`bull:image-processing:waiting`, `:active`, `:completed`, `:failed`) in real time during a bulk submit |
+
+The dashboard JSON is auto-loaded from `infra/grafana/provisioning/dashboards/image-pipeline.json`. Edit it there and `docker compose restart grafana` to pick up changes.
+
+**Known gap:** the worker is a separate process from the API, so its in-process Prometheus registry isn't scraped. Three panels show "No data" until the worker exposes its own `/metrics` endpoint (a follow-up; either add a tiny HTTP server to the worker or merge the worker in-process with the API).
 
 ### Health & observability
 
