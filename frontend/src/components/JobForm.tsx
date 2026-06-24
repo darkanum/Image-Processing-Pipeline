@@ -430,6 +430,7 @@ export const JobForm = ({ apiUrl: _apiUrl, onCreated }: JobFormProps): JSX.Eleme
           <WatermarkEditor
             value={transform.watermark}
             onChange={(v) => setTransformPart("watermark", v)}
+            rotation={transform.rotation}
           />
         )}
       </div>
@@ -652,6 +653,8 @@ const SliderField = ({ label, min, max, value, onChange }: SliderFieldProps): JS
 interface WatermarkEditorProps {
   value: NonNullable<TransformSpec["watermark"]>;
   onChange: (next: NonNullable<TransformSpec["watermark"]>) => void;
+  /** Current rotation in degrees — the placement toggle only matters when this is non-zero. */
+  rotation: number;
 }
 
 const POSITIONS: { key: string; label: string }[] = [
@@ -660,7 +663,7 @@ const POSITIONS: { key: string; label: string }[] = [
   { key: "bottom-left", label: "↙" }, { key: "bottom-center", label: "↓" }, { key: "bottom-right", label: "↘" },
 ];
 
-const WatermarkEditor = ({ value, onChange }: WatermarkEditorProps): JSX.Element => {
+const WatermarkEditor = ({ value, onChange, rotation }: WatermarkEditorProps): JSX.Element => {
   const update = (patch: Partial<typeof value>): void => {
     onChange({ ...value, ...patch });
   };
@@ -705,6 +708,40 @@ const WatermarkEditor = ({ value, onChange }: WatermarkEditorProps): JSX.Element
           onChange={(e) => update({ imageUrl: e.target.value })}
           placeholder="https://example.com/logo.png"
         />
+      )}
+
+      {/* Placement relative to rotation. Only relevant when a rotation
+          is configured; the toggle is hidden at rotation = 0 to avoid
+          clutter and to signal "this option has no effect right now". */}
+      {rotation !== 0 && (
+        <div className="wm-placement">
+          <div className="wm-placement-head">
+            <span className="wm-placement-title">When to apply</span>
+            <span className="wm-placement-hint">
+              Relative to the rotation step
+            </span>
+          </div>
+          <div className="seg-buttons" role="radiogroup" aria-label="Watermark placement">
+            <button
+              type="button"
+              className={`seg-btn ${(value.placement ?? "pre-rotation") === "pre-rotation" ? "active" : ""}`}
+              onClick={() => update({ placement: "pre-rotation" })}
+              aria-pressed={(value.placement ?? "pre-rotation") === "pre-rotation"}
+              title="Composite the watermark on the pre-rotation image, then rotate both — the watermark rotates with the image."
+            >
+              Before rotation
+            </button>
+            <button
+              type="button"
+              className={`seg-btn ${value.placement === "post-rotation" ? "active" : ""}`}
+              onClick={() => update({ placement: "post-rotation" })}
+              aria-pressed={value.placement === "post-rotation"}
+              title="Rotate the image first, then composite the watermark on the post-rotation canvas — the watermark stays upright at the chosen position on the final image."
+            >
+              After rotation
+            </button>
+          </div>
+        </div>
       )}
 
       {/* Text color (only meaningful for kind=text) */}

@@ -24,18 +24,33 @@ const DEFAULT_QUALITY = 82;
  * predictably:
  *   1. resize (fit/crop/pad/none)
  *   2. crop (post-resize; anchored to center by default)
- *   3. rotate 90/180/270°
- *   4. flipH / flipV
- *   5. grayscale
- *   6. watermark (text or fetched image, position + margin + opacity)
- *   7. overall opacity fade
+ *   3. flipH / flipV
+ *   4. color adjustments (grayscale / brightness / saturation / sepia / invert)
+ *
+ *   Then, depending on `spec.watermark.placement` (when a watermark is
+ *   configured), the order of the final three steps is:
+ *
+ *     placement = "pre-rotation"  (default — watermark rotates with image):
+ *       5. watermark  (positioned on the pre-rotation canvas)
+ *       6. rotation   (rotates the image AND the watermark together)
+ *       7. opacity    (overall alpha fade, sized to the post-rotation canvas)
+ *
+ *     placement = "post-rotation"  (watermark stays upright on the final image):
+ *       5. opacity    (overall alpha fade, sized to the pre-rotation canvas)
+ *       6. rotation   (rotates the image)
+ *       7. watermark  (positioned on the post-rotation canvas — upright)
+ *
  *   8. format / quality encode
+ *
+ * The two placements give the user a real choice: "glue the watermark to
+ * the image" vs "stamp the watermark on the final output". For rotation
+ * 0 both paths produce the same result.
  */
 export const transformImage = async (
   input: Buffer,
   spec: TransformSpec,
 ): Promise<TransformResult> => {
-  // Step 1: resolve target dimensions BEFORE building the pipeline so we
+  // Step 0: resolve target dimensions BEFORE building the pipeline so we
   // can position the watermark / crop focal point correctly.
   const sourceMeta: Metadata = await sharp(input).metadata();
   const srcW = sourceMeta.width ?? 0;
@@ -44,35 +59,36 @@ export const transformImage = async (
     throw new Error("Could not read source image dimensions");
   }
 
-  // Resize returns target W/H before rotate/crop. Rotate 90/270 swaps them.
-  // Crop further reduces dimensions. The final dimensions BEFORE watermark
-  // and encode are what the watermark overlay must match.
+  // Resize returns target W/H before rotate/crop. Crop further reduces
+  // dimensions. Both happen BEFORE rotation, so `postCropW/H` are the
+  // dimensions of the image as it stands at the watermarking stage for
+  // pre-rotation placement. (Earlier code applied a 90/270 swap here so
+  // the dimensions matched the post-rotation canvas, but that placed
+  // the watermark OFF the actual pre-rotation image — fixed by using
+  // the real pre-rotation dimensions throughout.)
   const { width: postResizeW, height: postResizeH } = computePostResizeDims(
     srcW,
     srcH,
     spec.resize ?? null,
   );
-  const swapOnRotate = spec.rotation === 90 || spec.rotation === 270;
-  const preCropW = swapOnRotate ? postResizeH : postResizeW;
-  const preCropH = swapOnRotate ? postResizeW : postResizeH;
+  const rot = normalizeRotation(spec.rotation);
   const { width: postCropW, height: postCropH } = computePostCropDims(
-    preCropW,
-    preCropH,
+    postResizeW,
+    postResizeH,
     spec.crop ?? null,
   );
 
-  // Step 1+2: resize
+  // Step 1: resize
   let pipeline: Sharp = applyResize(sharp(input, { failOn: "error" }), spec.resize, srcW, srcH);
 
-  // Step 3+4: rotate / flip
-  const rot = normalizeRotation(spec.rotation);
-  if (rot !== 0) {
-    pipeline = pipeline.rotate(rot);
-  }
+  // Step 2: flip (horizontal / vertical) — applied first because it
+  // commutes with every other operation; doing it before crop / watermark
+  // / rotate keeps the semantics simple ("flip means flip the image
+  // first, then do everything else to the flipped image").
   if (spec.flipHorizontal) pipeline = pipeline.flop();
   if (spec.flipVertical) pipeline = pipeline.flip();
 
-  // Step 5: color adjustments. We resolve the effective spec from the
+  // Step 3: color adjustments. We resolve the effective spec from the
   // new `colorAdjust` field, falling back to the legacy `grayscale` flag
   // for back-compat. `modulate` is applied for brightness/saturation, then
   // `grayscale` / `recomb` for sepia, then `negate` for invert.
@@ -124,55 +140,67 @@ export const transformImage = async (
   }
   if (ca && ca.invert) pipeline = pipeline.negate({ alpha: false });
 
-  // Step 6: explicit crop
+  // Step 4: explicit crop. Done before watermark so the user can crop
+  // the image without affecting the watermark placement; done before
+  // rotation so the crop coords are in the pre-rotation image's space.
   if (spec.crop) {
-    pipeline = applyCrop(pipeline, spec.crop, preCropW, preCropH);
+    pipeline = applyCrop(pipeline, spec.crop, postResizeW, postResizeH);
   }
 
-  // Step 7: watermark — built with POST-rotate-and-crop dimensions. We
-  // compute the explicit (left, top) of the overlay from the 9-zone
-  // position + margin (Sharp's gravity-based composite has no built-in
-  // margin offset, so we do it manually).
-  if (spec.watermark) {
-    let overlay = await buildWatermark(spec.watermark, postCropW, postCropH);
-    if (overlay) {
-      // Sharp refuses to composite an overlay that is larger than the
-      // destination in either dimension. If the user's font size / text
-      // length / margin makes the overlay bigger than the image, scale it
-      // down to fit. This keeps the watermark visible on small images
-      // instead of failing the whole job.
-      if (overlay.width > postCropW || overlay.height > postCropH) {
-        const scale = Math.min(postCropW / overlay.width, postCropH / overlay.height);
-        const newW = Math.max(1, Math.floor(overlay.width * scale));
-        const newH = Math.max(1, Math.floor(overlay.height * scale));
-        const resized = await sharp(overlay.buffer).resize(newW, newH).toBuffer();
-        overlay = { buffer: resized, width: newW, height: newH };
-      }
-      const { left, top } = computeWatermarkPosition(
-        spec.watermark.position,
-        spec.watermark.margin,
+  // Steps 5–7: watermark + rotation + opacity. The order depends on the
+  // user's watermark placement preference.
+  const postRot = computeRotatedDims(postCropW, postCropH, rot);
+  const placement: "pre-rotation" | "post-rotation" =
+    spec.watermark?.placement ?? "pre-rotation";
+
+  if (placement === "post-rotation" && spec.watermark) {
+    // Post-rotation: opacity → rotate → watermark. The watermark is
+    // positioned on the post-rotation canvas at the user-specified
+    // position so it lands exactly in the corner the user picked on
+    // the final image, without rotating with the image.
+    if (spec.opacity < 100) {
+      pipeline = applyOpacity(
+        pipeline,
+        spec.opacity,
+        spec.outputFormat as OutputFormat,
         postCropW,
         postCropH,
-        overlay.width,
-        overlay.height,
       );
-      pipeline = pipeline.composite([{ input: overlay.buffer, left, top }]);
     }
-  }
-
-  // Step 7: overall opacity fade. Only PNG can carry alpha; for jpeg/webp we
-  // approximate by multiplying RGB channels (visual fade).
-  if (spec.opacity < 100) {
-    pipeline = applyOpacity(
-      pipeline,
-      spec.opacity,
-      // The applyOpacity helper only branches on the literal "png"/"original"
-      // case. For other formats it uses a multiply-blend approximation, so the
-      // exact type doesn't matter — we cast to OutputFormat.
-      spec.outputFormat as OutputFormat,
-      postCropW,
-      postCropH,
-    );
+    if (rot !== 0) {
+      pipeline = pipeline.rotate(rot);
+    }
+    pipeline = await compositeWatermark(pipeline, spec.watermark, postRot.w, postRot.h);
+  } else {
+    // Pre-rotation (default): watermark → rotate → opacity. The
+    // watermark is placed on the pre-rotation image so the rotation
+    // rotates the image AND the watermark together — the watermark
+    // stays glued to the image.
+    //
+    // Why this default: rotating the image first would enlarge the
+    // canvas for non-90/270 angles (e.g. an 800×600 image rotated 37°
+    // becomes ~1000×960), and the "bottom-right" of that larger canvas
+    // would be somewhere off the actual image. Placing the watermark
+    // before the rotation means the bottom-right of the unrotated image
+    // stays at the bottom-right of the rotated image, just at an angle.
+    if (spec.watermark) {
+      pipeline = await compositeWatermark(pipeline, spec.watermark, postCropW, postCropH);
+    }
+    if (rot !== 0) {
+      pipeline = pipeline.rotate(rot);
+    }
+    if (spec.opacity < 100) {
+      // The opacity SVG is sized to the post-rotation canvas (because
+      // rotation just happened), so the fade covers the full rotated
+      // image — not just the pre-rotation rectangle.
+      pipeline = applyOpacity(
+        pipeline,
+        spec.opacity,
+        spec.outputFormat as OutputFormat,
+        postRot.w,
+        postRot.h,
+      );
+    }
   }
 
   // Step 8: encode
@@ -369,6 +397,26 @@ const normalizeRotation = (r: unknown): number => {
   return wrapped > 180 ? wrapped - 360 : wrapped;
 };
 
+/**
+ * Compute the bounding box of an image of size (W, H) after being
+ * rotated by `angleDeg` degrees. This is the size of the canvas that
+ * sharp's `.rotate(angle)` will produce.
+ *
+ * For 0/180/360: width and height are unchanged.
+ * For 90/270: width and height swap.
+ * For other angles: the bounding box is W*|cos|+H*|sin|.
+ */
+const computeRotatedDims = (W: number, H: number, angleDeg: number): { w: number; h: number } => {
+  if (angleDeg === 0) return { w: W, h: H };
+  const norm = ((angleDeg % 360) + 360) % 360;
+  if (norm === 180) return { w: W, h: H };
+  if (norm === 90 || norm === 270) return { w: H, h: W };
+  const rad = (angleDeg * Math.PI) / 180;
+  const w = Math.ceil(Math.abs(W * Math.cos(rad)) + Math.abs(H * Math.sin(rad)));
+  const h = Math.ceil(Math.abs(W * Math.sin(rad)) + Math.abs(H * Math.cos(rad)));
+  return { w, h };
+};
+
 /** Returns true if the perceived luminance of a color is "light" (>= 0.5). */
 const isLightColor = (rgb: { r: number; g: number; b: number }): boolean => {
   // Standard relative luminance per WCAG.
@@ -428,6 +476,57 @@ const computeWatermarkPosition = (
     row === 0 ? m : row === 2 ? destH - wmH - m : Math.round((destH - wmH) / 2);
 
   return { left: Math.max(0, left), top: Math.max(0, top) };
+};
+
+/**
+ * Render a watermark overlay and composite it onto the given sharp
+ * pipeline at the user-specified position. Auto-scales the overlay
+ * down if it would otherwise overflow the destination. Returns the
+ * pipeline with the watermark composited (or unchanged if the overlay
+ * is null/empty).
+ *
+ * Implementation note: returns a fresh pipeline that has been
+ * "materialized" to a buffer first. Sharp has a known issue where
+ * chaining `pipeline.composite()` and then `pipeline.rotate()` (or
+ * other geometric ops) on the same pipeline drops the composited
+ * overlay. Calling `toBuffer()` here forces the composite to be baked
+ * in, so the caller can safely chain further operations.
+ */
+const compositeWatermark = async (
+  pipeline: Sharp,
+  watermark: WatermarkSpec,
+  destW: number,
+  destH: number,
+): Promise<Sharp> => {
+  let overlay = await buildWatermark(watermark, destW, destH);
+  if (!overlay) return pipeline;
+  // Sharp refuses to composite an overlay that is larger than the
+  // destination in either dimension. If the user's font size / text
+  // length / margin makes the overlay bigger than the image, scale it
+  // down to fit. This keeps the watermark visible on small images
+  // instead of failing the whole job.
+  if (overlay.width > destW || overlay.height > destH) {
+    const scale = Math.min(destW / overlay.width, destH / overlay.height);
+    const newW = Math.max(1, Math.floor(overlay.width * scale));
+    const newH = Math.max(1, Math.floor(overlay.height * scale));
+    const resized = await sharp(overlay.buffer).resize(newW, newH).toBuffer();
+    overlay = { buffer: resized, width: newW, height: newH };
+  }
+  const { left, top } = computeWatermarkPosition(
+    watermark.position,
+    watermark.margin,
+    destW,
+    destH,
+    overlay.width,
+    overlay.height,
+  );
+  // IMPORTANT: bake the composite to a buffer before returning, so
+  // that subsequent rotate/flip/etc. on the returned pipeline don't
+  // drop the overlay (sharp's chained-geometry-op bug).
+  const baked = await pipeline
+    .composite([{ input: overlay.buffer, left, top }])
+    .toBuffer();
+  return sharp(baked, { failOn: "error" });
 };
 
 /**

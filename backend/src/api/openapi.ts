@@ -45,6 +45,16 @@ const watermarkSchema = z
           "Optional backing rectangle for the watermark. Set enabled=false to render the watermark on a transparent canvas. " +
           "When omitted, a black 40%-opacity backing is applied for back-compat.",
       }),
+    placement: z
+      .enum(["pre-rotation", "post-rotation"])
+      .default("pre-rotation")
+      .openapi({
+        description:
+          "When to apply the watermark relative to rotation. " +
+          "'pre-rotation' (default) composites the watermark on the pre-rotation image and then rotates both — the watermark rotates with the image. " +
+          "'post-rotation' rotates the image first and then composites the watermark on the post-rotation canvas — the watermark stays upright at the user-specified position on the final image. " +
+          "Has no effect when rotation is 0.",
+      }),
   })
   .openapi("Watermark");
 

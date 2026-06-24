@@ -92,6 +92,20 @@ export interface WatermarkSpec {
     /** Extra padding around the text/image in pixels. Defaults to 0. */
     padding?: number;
   };
+  /**
+   * When to apply the watermark relative to the rotation step.
+   * - "pre-rotation" (default): the watermark is composited onto the
+   *   pre-rotation image at the user-specified position, then the
+   *   rotation is applied to image+watermark together — so the
+   *   watermark rotates with the image.
+   * - "post-rotation": the rotation is applied to the image first,
+   *   then the watermark is composited onto the post-rotation canvas
+   *   at the user-specified position — so the watermark stays upright
+   *   and lands in the corner the user picked on the final image.
+   *
+   * This has no effect when rotation is 0.
+   */
+  placement?: "pre-rotation" | "post-rotation";
 }
 
 /**

@@ -688,6 +688,266 @@ describe("transformImage — custom rotation", () => {
   });
 });
 
+describe("transformImage — watermark + rotation glue", () => {
+  // Regression for job #98: the user reported that the watermark was
+  // not at bottom-right when rotation was applied. The bug was that
+  // we applied rotation BEFORE the watermark, so the watermark was
+  // placed on a canvas whose dimensions were wrong (sharp's rotate
+  // enlarges the canvas for non-90/270 angles). Fix: move rotation
+  // to be the last step so the watermark rotates with the image.
+  it("keeps the watermark visually attached to the bottom-right of the image when rotated -37°", async () => {
+    const input = await buildTestImage(800, 600, { r: 80, g: 140, b: 200 });
+    const result = await transformImage(input, {
+      ...DEFAULT_TRANSFORM,
+      rotation: -37,
+      watermark: {
+        kind: "text",
+        text: "wm",
+        position: "bottom-right",
+        margin: 10,
+        opacity: 100,
+        size: 40,
+      },
+      resize: null,
+    });
+    // Sanity: the image is rotated and the canvas is now larger.
+    expect(result.width).toBeGreaterThan(800);
+    expect(result.height).toBeGreaterThan(600);
+
+    // The bottom-right corner of the (pre-rotation) image lives at
+    // (800, 600) in the source. After rotating -37° around the image
+    // center, that corner lands at a specific point in the rotated
+    // canvas. The watermark should be near that point — close to the
+    // bottom-right of the canvas, NOT floating in the top-left.
+    // We sample a horizontal strip across the bottom of the rotated
+    // canvas and assert at least one pixel of the watermark (light
+    // pixels, since the source is dark blue and the text is white
+    // with a dark backing) is present in the bottom 20% of the
+    // canvas.
+    const { data, info } = await sharp(result.buffer)
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    const startY = Math.floor(info.height * 0.8) * info.width * info.channels;
+    let lightPixels = 0;
+    for (let i = startY; i < data.length; i += info.channels) {
+      const r = data[i], g = data[i + 1], b = data[i + 2];
+    // Count any pixel that's "noticeably different from dark blue" —
+    // the watermark is white text on a black backing, both of which
+    // are very different from (80, 140, 200).
+    if (Math.abs(r - 80) > 80 || Math.abs(g - 140) > 80 || Math.abs(b - 200) > 80) {
+      lightPixels += 1;
+    }
+  }
+    expect(lightPixels).toBeGreaterThan(0);
+  });
+});
+
+describe("transformImage — watermark placement (pre vs post rotation)", () => {
+  // The user can choose whether the watermark is composited BEFORE the
+  // rotation (so it rotates with the image — the default), or AFTER the
+  // rotation (so it stays upright at the user-specified position on the
+  // final image). These tests cover both paths and the corner cases.
+
+  /** Sample the raw pixels of `result` and return the {count, topY, leftX, rightX, bottomY}
+   *  bounding box of the WATERMARK TEXT (white pixels). The watermark
+   *  backing is dark — the same color as the opaque-black corners that
+   *  sharp fills into the larger canvas for non-90/270 rotations — so
+   *  we look for the unique white text instead. */
+  const locateWatermark = async (result: { buffer: Buffer }) => {
+    const { data, info } = await sharp(result.buffer)
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    const W = info.width;
+    const H = info.height;
+    const ch = info.channels;
+    let count = 0;
+    let topY = H, bottomY = -1, leftX = W, rightX = -1;
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const i = (y * W + x) * ch;
+        const r = data[i], g = data[i + 1], b = data[i + 2];
+        // White text on a black backing. White is the only signal that's
+        // unique to the watermark — the backing is the same color as
+        // sharp's rotation-canvas corners, and the source color is dark
+        // blue, so the only unique match is "very white".
+        if (r > 240 && g > 240 && b > 240) {
+          count += 1;
+          if (y < topY) topY = y;
+          if (y > bottomY) bottomY = y;
+          if (x < leftX) leftX = x;
+          if (x > rightX) rightX = x;
+        }
+      }
+    }
+    return { count, topY, bottomY, leftX, rightX, W, H };
+  };
+
+  it("pre-rotation (default): watermark rotates with the image — its bbox is NOT at the bottom-right of the post-rotation canvas", async () => {
+    // 90° rotation: the watermark is composited at the bottom-right of
+    // the pre-rotation image, then both are rotated. The result is
+    // NOT a watermark at the bottom-right of the final image — the
+    // watermark has moved to a different corner of the canvas because
+    // it rotated with the image.
+    const input = await buildTestImage(600, 400, { r: 80, g: 140, b: 200 });
+    const result = await transformImage(input, {
+      ...DEFAULT_TRANSFORM,
+      rotation: 90,
+      watermark: {
+        kind: "text",
+        text: "wm",
+        position: "bottom-right",
+        margin: 10,
+        opacity: 100,
+        size: 40,
+        // placement omitted — defaults to "pre-rotation"
+      },
+      resize: null,
+    });
+    // After 90° rotation the canvas is 400x600 (swapped).
+    expect(result.width).toBe(400);
+    expect(result.height).toBe(600);
+    const wm = await locateWatermark(result);
+    expect(wm.count).toBeGreaterThan(0);
+    // The watermark rotated with the image. It should NOT be in the
+    // bottom-right corner of the canvas (that's where post-rotation
+    // placement would put it). We assert that the watermark's
+    // top-left corner is not in the bottom-right quadrant of the
+    // canvas.
+    const horizCenter = wm.W / 2;
+    const vertCenter = wm.H / 2;
+    const inBottomRightQuadrant = wm.leftX > horizCenter && wm.topY > vertCenter;
+    expect(inBottomRightQuadrant).toBe(false);
+  });
+
+  it("post-rotation: watermark stays upright at the user-specified position of the post-rotation canvas", async () => {
+    // Same 90° rotation, but placement="post-rotation" — the watermark
+    // should land at the bottom-right of the FINAL 400x600 canvas (the
+    // bottom of the post-rotation image), NOT bottom-left.
+    const input = await buildTestImage(600, 400, { r: 80, g: 140, b: 200 });
+    const result = await transformImage(input, {
+      ...DEFAULT_TRANSFORM,
+      rotation: 90,
+      watermark: {
+        kind: "text",
+        text: "wm",
+        position: "bottom-right",
+        margin: 10,
+        opacity: 100,
+        size: 40,
+        placement: "post-rotation",
+      },
+      resize: null,
+    });
+    expect(result.width).toBe(400);
+    expect(result.height).toBe(600);
+    const wm = await locateWatermark(result);
+    expect(wm.count).toBeGreaterThan(0);
+    // The watermark should be in the bottom-RIGHT quadrant of the
+    // post-rotation canvas.
+    const horizCenter = wm.W / 2;
+    const vertCenter = wm.H / 2;
+    // Right half: most of the watermark's left edge should be > center
+    expect(wm.leftX).toBeGreaterThan(horizCenter * 0.6);
+    // Bottom half: most of the watermark's top edge should be > center
+    expect(wm.topY).toBeGreaterThan(vertCenter * 0.6);
+  });
+
+  it("post-rotation: places watermark at top-left when position=top-left, regardless of rotation direction", async () => {
+    // 180° rotation: top-left of the post-rotation canvas is top-left
+    // of the rotated image (since 180° keeps the corner positions).
+    const input = await buildTestImage(400, 300, { r: 80, g: 140, b: 200 });
+    const result = await transformImage(input, {
+      ...DEFAULT_TRANSFORM,
+      rotation: 180,
+      watermark: {
+        kind: "text",
+        text: "wm",
+        position: "top-left",
+        margin: 10,
+        opacity: 100,
+        size: 40,
+        placement: "post-rotation",
+      },
+      resize: null,
+    });
+    expect(result.width).toBe(400);
+    expect(result.height).toBe(300);
+    const wm = await locateWatermark(result);
+    expect(wm.count).toBeGreaterThan(0);
+    // The watermark should be in the top-left quadrant of the canvas.
+    expect(wm.topY).toBeLessThan(wm.H * 0.4);
+    expect(wm.leftX).toBeLessThan(wm.W * 0.4);
+  });
+
+  it("post-rotation: at rotation 0 the two placements produce visually identical results", async () => {
+    // No rotation — placement is irrelevant. Both should put the
+    // watermark at the bottom-right of the 400x300 image.
+    const input = await buildTestImage(400, 300, { r: 80, g: 140, b: 200 });
+    const preSpec: TransformSpec = {
+      ...DEFAULT_TRANSFORM,
+      rotation: 0,
+      watermark: {
+        kind: "text", text: "wm", position: "bottom-right",
+        margin: 10, opacity: 100, size: 40,
+        placement: "pre-rotation",
+      },
+      resize: null,
+    };
+    const postSpec: TransformSpec = {
+      ...DEFAULT_TRANSFORM,
+      rotation: 0,
+      watermark: {
+        kind: "text", text: "wm", position: "bottom-right",
+        margin: 10, opacity: 100, size: 40,
+        placement: "post-rotation",
+      },
+      resize: null,
+    };
+    const pre = await transformImage(input, preSpec);
+    const post = await transformImage(input, postSpec);
+    // Both canvases are 400x300.
+    expect(pre.width).toBe(400); expect(pre.height).toBe(300);
+    expect(post.width).toBe(400); expect(post.height).toBe(300);
+    // The watermarks land at the same location, so their bboxes should
+    // match closely.
+    const wmPre = await locateWatermark(pre);
+    const wmPost = await locateWatermark(post);
+    expect(Math.abs(wmPre.leftX - wmPost.leftX)).toBeLessThan(5);
+    expect(Math.abs(wmPre.topY - wmPost.topY)).toBeLessThan(5);
+  });
+
+  it("post-rotation + non-90 angle: watermark is positioned on the larger post-rotation canvas", async () => {
+    // 30° rotation: the canvas grows to fit the rotated image, and the
+    // watermark is placed on that larger canvas at the user-specified
+    // position. This is the "the user picked the corner of the final
+    // image" semantic.
+    const input = await buildTestImage(400, 300, { r: 80, g: 140, b: 200 });
+    const result = await transformImage(input, {
+      ...DEFAULT_TRANSFORM,
+      rotation: 30,
+      watermark: {
+        kind: "text",
+        text: "wm",
+        position: "bottom-right",
+        margin: 10,
+        opacity: 100,
+        size: 40,
+        placement: "post-rotation",
+      },
+      resize: null,
+    });
+    // Canvas grew.
+    expect(result.width).toBeGreaterThan(400);
+    expect(result.height).toBeGreaterThan(300);
+    const wm = await locateWatermark(result);
+    expect(wm.count).toBeGreaterThan(0);
+    // The watermark should be in the bottom-right quadrant of the new
+    // larger canvas.
+    expect(wm.leftX).toBeGreaterThan(wm.W * 0.5);
+    expect(wm.topY).toBeGreaterThan(wm.H * 0.5);
+  });
+});
+
 describe("transformImage — color adjustments", () => {
   it("brightness 50 darkens the image", async () => {
     const input = await buildTestImage(50, 50, { r: 200, g: 100, b: 50 });

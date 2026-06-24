@@ -493,6 +493,33 @@ select.form-input {
   padding: 2px;
   align-self: flex-start;
 }
+
+/* Placement toggle (pre/post rotation) — only rendered when rotation != 0 */
+.wm-placement {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.wm-placement-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.wm-placement-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-soft);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.wm-placement-hint {
+  font-size: 11px;
+  color: var(--text-mute);
+}
 .wm-position-picker {
   display: grid;
   grid-template-columns: repeat(3, 36px);
@@ -1265,15 +1292,16 @@ button.primary:disabled { opacity: 0.5; cursor: not-allowed; }
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
 }
 
-/* ── Slider restyle: bigger thumb, native filled track, value bubble ──
-   The default <input type="range"> thumb is tiny (~14px) and easy to miss.
-   Strategy:
-     - Keep the input at its natural rendering (so accent-color paints
-       the filled portion of the track natively — no JS sync needed).
-     - Use a 22px thumb (sized to be easy to grab) with a primary-color
-       border, and vertically center it on an 8px-tall track.
-     - The 24px total track height leaves 8px of padding on each side
-       so the thumb doesn't get clipped at the top/bottom. */
+/* ── Slider restyle: MUI-inspired ─────────────────────────────
+   Inspired by https://mui.com/material-ui/react-slider/
+   - Thin 4px track (pill-shaped, gray)
+   - Browser-native filled portion via accent-color
+   - Small 16px circular thumb, primary-color filled, white border
+     (border-box so the 16px is the total visual size — no off-center)
+   - On hover: thumb scales to ~18px
+   - On active/drag: a soft primary-color halo appears around the thumb
+   - The 24px total input height leaves 8px of padding on each side
+     so the thumb isn't clipped at the top/bottom. */
 .slider input[type="range"],
 input[type="range"].form-input.slider {
   width: 100%;
@@ -1285,60 +1313,81 @@ input[type="range"].form-input.slider {
   margin: 0;
   cursor: pointer;
   accent-color: var(--primary);
+  box-sizing: border-box;
 }
 .slider input[type="range"]:focus-visible,
 input[type="range"].form-input.slider:focus-visible {
   box-shadow: var(--focus-ring);
 }
-/* Webkit: custom track + thumb */
+/* Track: 4px pill, gray */
 .slider input[type="range"]::-webkit-slider-runnable-track,
 input[type="range"].form-input.slider::-webkit-slider-runnable-track {
-  height: 8px;
+  height: 4px;
   background: var(--surface-3);
-  border-radius: 4px;
+  border-radius: 999px;
   border: none;
 }
+.slider input[type="range"]::-moz-range-track,
+input[type="range"].form-input.slider::-moz-range-track {
+  height: 4px;
+  background: var(--surface-3);
+  border-radius: 999px;
+  border: none;
+}
+/* Thumb: 16px circle, primary fill, white border, halo on drag */
 .slider input[type="range"]::-webkit-slider-thumb,
 input[type="range"].form-input.slider::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
-  width: 22px;
-  height: 22px;
+  box-sizing: border-box;
+  width: 16px;
+  height: 16px;
   border-radius: 50%;
-  background: var(--surface);
-  border: 3px solid var(--primary);
-  margin-top: -7px; /* center 22px thumb on 8px track: (22-8)/2 = 7 */
+  background: var(--primary);
+  border: 2px solid var(--surface);
+  margin-top: -6px; /* center 16px thumb on 4px track: (16-4)/2 = 6 */
   cursor: grab;
-  box-shadow: var(--shadow-sm);
-  transition: transform 0.1s, box-shadow 0.1s;
+  box-shadow:
+    0 1px 4px rgba(0, 0, 0, 0.2),
+    0 0 0 0 rgba(37, 99, 235, 0);
+  transition: transform 0.12s, box-shadow 0.12s;
 }
 .slider input[type="range"]::-webkit-slider-thumb:hover,
 input[type="range"].form-input.slider::-webkit-slider-thumb:hover {
   transform: scale(1.15);
-  box-shadow: var(--shadow);
 }
 .slider input[type="range"]::-webkit-slider-thumb:active,
 input[type="range"].form-input.slider::-webkit-slider-thumb:active {
   cursor: grabbing;
-  transform: scale(1.1);
-}
-/* Firefox: custom track + thumb */
-.slider input[type="range"]::-moz-range-track,
-input[type="range"].form-input.slider::-moz-range-track {
-  height: 8px;
-  background: var(--surface-3);
-  border-radius: 4px;
-  border: none;
+  transform: scale(1.2);
+  box-shadow:
+    0 1px 6px rgba(0, 0, 0, 0.3),
+    0 0 0 8px rgba(37, 99, 235, 0.15);
 }
 .slider input[type="range"]::-moz-range-thumb,
 input[type="range"].form-input.slider::-moz-range-thumb {
-  width: 16px; /* moz ignores border in box size; add via border for visual match */
+  box-sizing: border-box;
+  width: 16px;
   height: 16px;
   border-radius: 50%;
-  background: var(--surface);
-  border: 3px solid var(--primary);
+  background: var(--primary);
+  border: 2px solid var(--surface);
   cursor: grab;
-  box-shadow: var(--shadow-sm);
+  box-shadow:
+    0 1px 4px rgba(0, 0, 0, 0.2),
+    0 0 0 0 rgba(37, 99, 235, 0);
+  transition: transform 0.12s, box-shadow 0.12s;
+}
+.slider input[type="range"]::-moz-range-thumb:hover,
+input[type="range"].form-input.slider::-moz-range-thumb:hover {
+  transform: scale(1.15);
+}
+.slider input[type="range"]::-moz-range-thumb:active,
+input[type="range"].form-input.slider::-moz-range-thumb:active {
+  transform: scale(1.2);
+  box-shadow:
+    0 1px 6px rgba(0, 0, 0, 0.3),
+    0 0 0 8px rgba(37, 99, 235, 0.15);
 }
 
 /* ── Form select (legacy) ──────────────────────────────────────── */

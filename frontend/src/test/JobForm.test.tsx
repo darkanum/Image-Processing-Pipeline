@@ -196,4 +196,59 @@ describe("JobForm", () => {
     fireEvent.change(formatSelect, { target: { value: "png" } });
     expect(screen.getByLabelText(/image opacity/i)).toBeTruthy();
   });
+
+  it("watermark placement toggle is hidden when rotation is 0", () => {
+    render(<JobForm apiUrl="" onCreated={undefined} />);
+    // Enable watermark
+    fireEvent.click(screen.getByRole("checkbox", { name: /^watermark$/i }));
+    // The placement radiogroup should not exist because rotation is 0.
+    expect(screen.queryByRole("radiogroup", { name: /watermark placement/i })).toBeNull();
+  });
+
+  it("watermark placement toggle appears when rotation is non-zero and defaults to 'pre-rotation'", () => {
+    render(<JobForm apiUrl="" onCreated={undefined} />);
+    // Enable watermark
+    fireEvent.click(screen.getByRole("checkbox", { name: /^watermark$/i }));
+    // Set a custom rotation
+    const customInput = screen.getByLabelText(/custom rotation angle/i) as HTMLInputElement;
+    fireEvent.change(customInput, { target: { value: "30" } });
+    // The placement radiogroup should now be visible
+    const group = screen.getByRole("radiogroup", { name: /watermark placement/i });
+    expect(group).toBeTruthy();
+    // The "Before rotation" button should be the default (active)
+    const beforeBtn = screen.getByRole("button", { name: /before rotation/i }) as HTMLButtonElement;
+    const afterBtn = screen.getByRole("button", { name: /after rotation/i }) as HTMLButtonElement;
+    expect(beforeBtn.getAttribute("aria-pressed")).toBe("true");
+    expect(afterBtn.getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("clicking 'After rotation' toggles the placement to post-rotation", () => {
+    render(<JobForm apiUrl="" onCreated={undefined} />);
+    fireEvent.click(screen.getByRole("checkbox", { name: /^watermark$/i }));
+    const customInput = screen.getByLabelText(/custom rotation angle/i) as HTMLInputElement;
+    fireEvent.change(customInput, { target: { value: "45" } });
+    const beforeBtn = screen.getByRole("button", { name: /before rotation/i }) as HTMLButtonElement;
+    const afterBtn = screen.getByRole("button", { name: /after rotation/i }) as HTMLButtonElement;
+    expect(beforeBtn.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(afterBtn);
+    expect(afterBtn.getAttribute("aria-pressed")).toBe("true");
+    expect(beforeBtn.getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("setting rotation back to 0 hides the placement toggle but keeps the chosen value", () => {
+    render(<JobForm apiUrl="" onCreated={undefined} />);
+    fireEvent.click(screen.getByRole("checkbox", { name: /^watermark$/i }));
+    const customInput = screen.getByLabelText(/custom rotation angle/i) as HTMLInputElement;
+    fireEvent.change(customInput, { target: { value: "30" } });
+    fireEvent.click(screen.getByRole("button", { name: /after rotation/i }));
+    // The toggle is visible at 30°
+    expect(screen.queryByRole("radiogroup", { name: /watermark placement/i })).toBeTruthy();
+    // Setting rotation back to 0 hides the toggle (it's irrelevant)
+    fireEvent.change(customInput, { target: { value: "0" } });
+    expect(screen.queryByRole("radiogroup", { name: /watermark placement/i })).toBeNull();
+    // Re-enabling rotation reveals the toggle again with the same selection
+    fireEvent.change(customInput, { target: { value: "60" } });
+    const afterBtn = screen.getByRole("button", { name: /after rotation/i }) as HTMLButtonElement;
+    expect(afterBtn.getAttribute("aria-pressed")).toBe("true");
+  });
 });
