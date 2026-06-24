@@ -31,6 +31,19 @@ const watermarkSchema = z
     margin: z.number().int().min(0).max(500).openapi({ description: "Distance from the chosen edge in pixels." }),
     opacity: z.number().int().min(0).max(100).openapi({ description: "Watermark opacity (0-100%)." }),
     size: z.number().int().min(8).max(2000).openapi({ description: "Font size (px) for text, or rendered width (px) for image." }),
+    background: z
+      .object({
+        enabled: z.boolean().default(true).openapi({ description: "When false, the watermark is rendered with no backing rectangle (transparent)." }),
+        color: z.string().regex(/^#[0-9a-fA-F]{6}$/).default("#000000").openapi({ description: "Backing color, hex like #000000." }),
+        opacity: z.number().int().min(0).max(100).default(40).openapi({ description: "Backing opacity 0-100%." }),
+        padding: z.number().int().min(0).max(200).default(0).openapi({ description: "Extra padding around the text/image in pixels." }),
+      })
+      .optional()
+      .openapi("WatermarkBackground", {
+        description:
+          "Optional backing rectangle for the watermark. Set enabled=false to render the watermark on a transparent canvas. " +
+          "When omitted, a black 40%-opacity backing is applied for back-compat.",
+      }),
   })
   .openapi("Watermark");
 

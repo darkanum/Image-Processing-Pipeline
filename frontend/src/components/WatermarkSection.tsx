@@ -1,6 +1,6 @@
 import type { WatermarkSpec, WatermarkKind, WatermarkPosition } from "../types/job";
-import { POSITION_GRID } from "../types/job";
-import { NumberField, Slider } from "./controls";
+import { DEFAULT_WATERMARK_BACKGROUND, POSITION_GRID } from "../types/job";
+import { NumberField, Slider, ToggleRow } from "./controls";
 
 interface WatermarkSectionProps {
   /**
@@ -19,17 +19,27 @@ const FALLBACK: WatermarkSpec = {
   margin: 24,
   opacity: 70,
   size: 32,
+  background: { ...DEFAULT_WATERMARK_BACKGROUND },
 };
+
+/** Read a background field, falling back to the default if missing. */
+const readBg = (spec: WatermarkSpec) => spec.background ?? DEFAULT_WATERMARK_BACKGROUND;
 
 export const WatermarkSection = ({ value, onChange }: WatermarkSectionProps): JSX.Element => {
   const enabled = value !== null;
   const v: WatermarkSpec = value ?? FALLBACK;
+  const bg = readBg(v);
 
   /** Apply a patch. If the section is currently disabled, enabling it
    * implicitly — the user is now actively editing. */
   const apply = (patch: Partial<WatermarkSpec>): void => {
     if (!enabled) onChange({ ...FALLBACK, ...patch });
     else onChange({ ...v, ...patch });
+  };
+
+  /** Apply a patch to the background sub-spec, preserving all other fields. */
+  const applyBg = (patch: Partial<NonNullable<WatermarkSpec["background"]>>): void => {
+    apply({ background: { ...bg, ...patch } });
   };
 
   const setEnabled = (on: boolean): void => {
@@ -156,6 +166,66 @@ export const WatermarkSection = ({ value, onChange }: WatermarkSectionProps): JS
           max={100}
           unit="%"
         />
+
+        {/* ── Background controls ─────────────────────────────────── */}
+        <div className="wm-bg-block">
+          <div className="wm-bg-head">
+            <span className="wm-bg-title">Backing rectangle</span>
+            <span className="wm-bg-hint">
+              Optional fill behind the watermark for legibility on busy backgrounds.
+            </span>
+          </div>
+          <ToggleRow
+            label="Add backing rectangle"
+            checked={bg.enabled}
+            onChange={(b) => applyBg({ enabled: b })}
+            hint={bg.enabled ? "On" : "Off — watermark only, transparent around it"}
+          />
+          {bg.enabled && (
+            <div className="wm-bg-controls">
+              <label className="color-field">
+                <span>Backing color</span>
+                <div className="color-row">
+                  <input
+                    type="color"
+                    value={bg.color}
+                    onChange={(e) => applyBg({ color: e.target.value })}
+                    aria-label="Backing color"
+                  />
+                  <input
+                    type="text"
+                    className="form-input color-hex"
+                    value={bg.color}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      // Only accept 7-char hex strings
+                      if (/^#[0-9a-fA-F]{6}$/.test(v)) applyBg({ color: v });
+                      else if (/^#[0-9a-fA-F]{0,6}$/.test(v)) applyBg({ color: v });
+                    }}
+                    maxLength={7}
+                    spellCheck={false}
+                  />
+                </div>
+              </label>
+              <Slider
+                label="Backing opacity"
+                value={bg.opacity}
+                onChange={(n) => applyBg({ opacity: n })}
+                min={0}
+                max={100}
+                unit="%"
+              />
+              <Slider
+                label="Backing padding"
+                value={bg.padding}
+                onChange={(n) => applyBg({ padding: n })}
+                min={0}
+                max={64}
+                unit="px"
+              />
+            </div>
+          )}
+        </div>
       </fieldset>
     </div>
   );

@@ -91,4 +91,40 @@ describe("JobForm", () => {
     expect(result.textContent).toContain("800");
     expect(result.textContent).toContain("600");
   });
+
+  it("enables the watermark and shows the backing toggle", () => {
+    render(<JobForm apiUrl="" onCreated={undefined} />);
+    fireEvent.click(screen.getByRole("checkbox", { name: /^watermark$/i }));
+    // The backing rectangle toggle should be visible now.
+    expect(screen.getByRole("checkbox", { name: /add backing rectangle/i })).toBeTruthy();
+  });
+
+  it("toggling the watermark backing hides the color pickers", () => {
+    render(<JobForm apiUrl="" onCreated={undefined} />);
+    fireEvent.click(screen.getByRole("checkbox", { name: /^watermark$/i }));
+    // Default backing is enabled → color picker present
+    expect(screen.getByLabelText(/backing color/i)).toBeTruthy();
+    // Toggle off
+    fireEvent.click(screen.getByRole("checkbox", { name: /add backing rectangle/i }));
+    expect(screen.queryByLabelText(/backing color/i)).toBeNull();
+  });
+
+  it("fit mode shows the pad background color picker", () => {
+    render(<JobForm apiUrl="" onCreated={undefined} />);
+    fireEvent.click(screen.getByRole("radio", { name: /^fit/i }));
+    // Now there should be a color input labelled "Padding background color"
+    expect(screen.getByLabelText(/padding background color/i)).toBeTruthy();
+  });
+
+  it("pad mode shows the pad background color picker", () => {
+    render(<JobForm apiUrl="" onCreated={undefined} />);
+    fireEvent.click(screen.getByRole("radio", { name: /^pad/i }));
+    expect(screen.getByLabelText(/padding background color/i)).toBeTruthy();
+  });
+
+  it("off mode hides the pad background color picker", () => {
+    render(<JobForm apiUrl="" onCreated={undefined} />);
+    // Default is Off
+    expect(screen.queryByLabelText(/padding background color/i)).toBeNull();
+  });
 });

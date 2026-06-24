@@ -11,6 +11,28 @@
       href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
+    <script>
+      // Apply the persisted theme to <html data-theme="..."> BEFORE the
+      // CSS loads, so the first paint is correctly themed and there's no
+      // flash of the wrong color scheme. Mirrors the resolution logic
+      // in useTheme.ts so the two stay in sync.
+      (function () {
+        try {
+          var mode = localStorage.getItem("ipp.theme");
+          if (mode !== "light" && mode !== "dark" && mode !== "system") mode = "system";
+          var resolved;
+          if (mode === "light") resolved = "light";
+          else if (mode === "dark") resolved = "dark";
+          else
+            resolved = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
+              ? "dark"
+              : "light";
+          document.documentElement.setAttribute("data-theme", resolved);
+        } catch (e) {
+          document.documentElement.setAttribute("data-theme", "light");
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

@@ -107,15 +107,54 @@ export const ResizeSection = ({ value, onChange }: ResizeSectionProps): JSX.Elem
         hint="— derive height from width (or vice versa)"
       />
 
-      {value.mode === "pad" && (
-        <label className="select">
-          <span>Pad background</span>
-          <input
-            type="color"
-            value={value.padBackground ?? "#ffffff"}
-            onChange={(e) => update({ padBackground: e.target.value })}
-          />
-        </label>
+      {(value.mode === "fit" || value.mode === "pad") && (
+        <div className="pad-bg-block">
+          <div className="pad-bg-head">
+            <span className="pad-bg-title">Padding background</span>
+            <span className="pad-bg-hint">
+              {value.mode === "fit"
+                ? "Used when the source aspect ratio doesn't match the target box."
+                : "Fills the area around the scaled-down image."}
+            </span>
+          </div>
+          <div className="pad-bg-row">
+            <input
+              type="color"
+              value={value.padBackground ?? "#ffffff"}
+              onChange={(e) => update({ padBackground: e.target.value })}
+              aria-label="Padding background color"
+            />
+            <input
+              type="text"
+              className="form-input color-hex"
+              value={value.padBackground ?? "#ffffff"}
+              onChange={(e) => {
+                const v = e.target.value;
+                if (/^#[0-9a-fA-F]{0,6}$/.test(v)) {
+                  update({ padBackground: v });
+                }
+              }}
+              maxLength={7}
+              spellCheck={false}
+            />
+            <div className="pad-bg-presets">
+              {[
+                { label: "White", value: "#ffffff" },
+                { label: "Black", value: "#000000" },
+                { label: "Transparent", value: "#000000" }, // PNG only; visually a flat color
+              ].map((p) => (
+                <button
+                  key={p.value + p.label}
+                  type="button"
+                  className={`preset-pill ${value.padBackground === p.value ? "active" : ""}`}
+                  onClick={() => update({ padBackground: p.value })}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

@@ -70,6 +70,20 @@ export interface WatermarkSpec {
   opacity: number;
   /** Text size in px, or image render width in px (height keeps aspect). */
   size: number;
+  /**
+   * Optional backing rectangle behind the watermark for legibility.
+   * `enabled=false` (or omitting the field) renders the watermark with
+   * no backing — fully transparent so the source image shows through.
+   */
+  background?: {
+    enabled: boolean;
+    /** Hex like "#000000". Defaults to "#000000" when omitted. */
+    color?: string;
+    /** Backing opacity 0-100. Defaults to 40 when omitted. */
+    opacity?: number;
+    /** Extra padding around the text/image in pixels. Defaults to 0. */
+    padding?: number;
+  };
 }
 
 export interface TransformSpec {

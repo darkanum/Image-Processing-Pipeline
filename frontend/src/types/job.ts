@@ -46,7 +46,21 @@ export interface WatermarkSpec {
   margin: number;
   opacity: number;
   size: number;
+  /** Optional backing rectangle behind the text/image. */
+  background?: {
+    enabled: boolean;
+    color: string;        // hex like "#000000"
+    opacity: number;      // 0-100
+    padding: number;      // px around the text/image
+  };
 }
+
+export const DEFAULT_WATERMARK_BACKGROUND = {
+  enabled: true,
+  color: "#000000",
+  opacity: 40,
+  padding: 6,
+};
 
 export interface TransformSpec {
   outputFormat: OutputFormat;
@@ -129,6 +143,7 @@ export const DEFAULT_WATERMARK: WatermarkSpec = {
   margin: 24,
   opacity: 70,
   size: 32,
+  background: { ...DEFAULT_WATERMARK_BACKGROUND },
 };
 
 export const RESOLUTION_PRESETS = {

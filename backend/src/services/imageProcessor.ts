@@ -381,7 +381,34 @@ const buildWatermark = async (
           .png()
           .toBuffer();
       }
-      return { buffer: overlay, width: wmW, height: wmH };
+
+      // Optional backing rectangle for image watermarks. Same semantics
+      // as the text path: enabled=true paints a coloured rectangle
+      // behind the image; enabled=false returns the image as-is on a
+      // transparent canvas.
+      const bg = spec.background ?? null;
+      const bgEnabled = bg?.enabled !== false;
+      if (!bgEnabled) {
+        return { buffer: overlay, width: wmW, height: wmH };
+      }
+      const bgColor = bg?.color ?? "#000000";
+      const bgOpacity = (bg?.opacity ?? 40) / 100;
+      const bgPad = Math.max(0, Math.round(bg?.padding ?? 0));
+      const bgRgb = parseColor(bgColor);
+      const backingW = wmW + bgPad * 2;
+      const backingH = wmH + bgPad * 2;
+      const composed = await sharp({
+        create: {
+          width: backingW,
+          height: backingH,
+          channels: 4,
+          background: { r: bgRgb.r, g: bgRgb.g, b: bgRgb.b, alpha: bgOpacity },
+        },
+      })
+        .composite([{ input: overlay, left: bgPad, top: bgPad }])
+        .png()
+        .toBuffer();
+      return { buffer: composed, width: backingW, height: backingH };
     } catch (err) {
       throw new Error(
         `Watermark image URL fetch failed: ${(err as Error).message}`,
@@ -410,6 +437,14 @@ const buildWatermark = async (
   const cellH = Math.round(fontSize * 1.35);
   const canvasH = cellH + padY * 2;
 
+  // Backing configuration. When `background.enabled === false` we render
+  // the text on a transparent canvas — the source image shows through.
+  const bg = spec.background ?? null;
+  const bgEnabled = bg?.enabled !== false; // default ON for back-compat
+  const bgColor = bg?.color ?? "#000000";
+  const bgOpacity = (bg?.opacity ?? 40) / 100;
+  const bgPad = Math.max(0, Math.round(bg?.padding ?? 0));
+
   const textSvg = `
     <svg xmlns="http://www.w3.org/2000/svg" width="${canvasW}" height="${canvasH}">
       <style>
@@ -423,21 +458,32 @@ const buildWatermark = async (
     .png()
     .toBuffer();
 
-  // Compose with a dark backing rectangle for legibility, sized to the
-  // known canvas dimensions (no measurement-based sizing).
+  if (!bgEnabled) {
+    // No backing — return the text-only PNG on a transparent canvas. The
+    // source image shows through wherever the text doesn't paint.
+    return { buffer: textBuf, width: canvasW, height: canvasH };
+  }
+
+  // Backing is enabled. Render the text on top of a coloured rectangle
+  // sized to the canvas plus the requested padding. The colour, opacity
+  // and padding all come from the spec so the user can match the look
+  // to the underlying image.
+  const bgRgb = parseColor(bgColor);
+  const backingW = canvasW + bgPad * 2;
+  const backingH = canvasH + bgPad * 2;
   const composed = await sharp({
     create: {
-      width: canvasW,
-      height: canvasH,
+      width: backingW,
+      height: backingH,
       channels: 4,
-      background: { r: 0, g: 0, b: 0, alpha: opacity * 0.4 },
+      background: { r: bgRgb.r, g: bgRgb.g, b: bgRgb.b, alpha: bgOpacity },
     },
   })
-    .composite([{ input: textBuf, left: 0, top: 0 }])
+    .composite([{ input: textBuf, left: bgPad, top: bgPad }])
     .png()
     .toBuffer();
 
-  return { buffer: composed, width: canvasW, height: canvasH };
+  return { buffer: composed, width: backingW, height: backingH };
 };
 
 // --- Opacity helper --------------------------------------------------------

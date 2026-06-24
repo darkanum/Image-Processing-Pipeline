@@ -1,6 +1,8 @@
 import { lazy, Suspense, useState } from "react";
 import { JobForm } from "./components/JobForm";
 import { HealthIndicator } from "./components/HealthIndicator";
+import { ThemeToggle } from "./components/ThemeToggle";
+import { useTheme } from "./hooks/useTheme";
 
 // Code-split the job list — it pulls in the Firebase SDK which is the
 // single largest contributor to the bundle. Loading it on-demand drops
@@ -15,6 +17,9 @@ const API_DISPLAY =
     : "/api";
 
 const App = (): JSX.Element => {
+  // Initialize the theme once at the root so the first paint is already
+  // styled correctly (no flash of light theme in dark mode).
+  useTheme();
   const [refreshSignal, setRefreshSignal] = useState<number>(0);
 
   return (
@@ -36,6 +41,7 @@ const App = (): JSX.Element => {
         </div>
         <div className="header-meta">
           <HealthIndicator />
+          <ThemeToggle />
           <span className="api-line">API: <code>{API_DISPLAY}</code></span>
         </div>
       </header>

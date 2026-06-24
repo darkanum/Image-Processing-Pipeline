@@ -1,6 +1,12 @@
 import { useMemo, useState, type FormEvent } from "react";
-import type { OutputFormat, ResizeMode, TransformSpec } from "../types/job";
-import { DEFAULT_TRANSFORM, DEFAULT_RESIZE, DEFAULT_WATERMARK, MAX_IMAGE_BYTES } from "../types/job";
+import type { OutputFormat, ResizeMode, TransformSpec, WatermarkSpec } from "../types/job";
+import {
+  DEFAULT_TRANSFORM,
+  DEFAULT_RESIZE,
+  DEFAULT_WATERMARK,
+  DEFAULT_WATERMARK_BACKGROUND,
+  MAX_IMAGE_BYTES,
+} from "../types/job";
 import { apiRequest, ApiError } from "../lib/api";
 
 interface JobFormProps {
@@ -352,6 +358,59 @@ export const JobForm = ({ apiUrl: _apiUrl, onCreated }: JobFormProps): JSX.Eleme
             </div>
           </div>
         )}
+
+        {/* Padding background — visible whenever the resize mode may produce
+            padding (fit pads when source aspect != target; pad always pads). */}
+        {(r.mode === "fit" || r.mode === "pad") && (
+          <div className="pad-bg-block">
+            <div className="pad-bg-head">
+              <span className="pad-bg-title">Padding background</span>
+              <span className="pad-bg-hint">
+                {r.mode === "fit"
+                  ? "Used when the source aspect ratio doesn't match the target box."
+                  : "Fills the area around the scaled image to the target size."}
+              </span>
+            </div>
+            <div className="pad-bg-row">
+              <input
+                type="color"
+                value={r.padBackground ?? "#ffffff"}
+                onChange={(e) => handleResize({ padBackground: e.target.value })}
+                aria-label="Padding background color"
+              />
+              <input
+                type="text"
+                className="form-input color-hex"
+                value={r.padBackground ?? "#ffffff"}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (/^#[0-9a-fA-F]{0,6}$/.test(v)) {
+                    handleResize({ padBackground: v });
+                  }
+                }}
+                maxLength={7}
+                spellCheck={false}
+              />
+              <div className="pad-bg-presets">
+                {[
+                  { label: "White", value: "#ffffff" },
+                  { label: "Black", value: "#000000" },
+                  { label: "Red", value: "#ef4444" },
+                  { label: "Blue", value: "#3b82f6" },
+                ].map((p) => (
+                  <button
+                    key={p.label}
+                    type="button"
+                    className={`preset-pill ${r.padBackground === p.value ? "active" : ""}`}
+                    onClick={() => handleResize({ padBackground: p.value })}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ── Watermark ────────────────────────────────────────────────── */}
@@ -495,6 +554,10 @@ const WatermarkEditor = ({ value, onChange }: WatermarkEditorProps): JSX.Element
   const update = (patch: Partial<typeof value>): void => {
     onChange({ ...value, ...patch });
   };
+  const bg: NonNullable<WatermarkSpec["background"]> = value.background ?? DEFAULT_WATERMARK_BACKGROUND;
+  const updateBg = (patch: Partial<NonNullable<WatermarkSpec["background"]>>): void => {
+    update({ background: { ...bg, ...patch } });
+  };
   return (
     <div className="wm-editor">
       <div className="wm-type-tabs">
@@ -586,6 +649,97 @@ const WatermarkEditor = ({ value, onChange }: WatermarkEditorProps): JSX.Element
             onChange={(e) => update({ opacity: Number(e.target.value) })}
           />
         </div>
+      </div>
+
+      {/* ── Backing rectangle controls ───────────────────────────── */}
+      <div className="wm-bg-block">
+        <div className="wm-bg-head">
+          <span className="wm-bg-title">Backing rectangle</span>
+          <span className="wm-bg-hint">
+            Optional fill behind the watermark for legibility on busy backgrounds.
+          </span>
+        </div>
+        <label className="toggle-row">
+          <input
+            type="checkbox"
+            checked={bg.enabled}
+            onChange={(e) => updateBg({ enabled: e.target.checked })}
+            aria-label="Add backing rectangle"
+          />
+          <span className="toggle-label">Add backing rectangle</span>
+          <span className="toggle-hint">
+            {bg.enabled ? "On" : "Off — transparent around watermark"}
+          </span>
+        </label>
+        {bg.enabled && (
+          <div className="wm-bg-controls">
+            <div className="color-field">
+              <span>Backing color</span>
+              <div className="color-row">
+                <input
+                  type="color"
+                  value={bg.color}
+                  onChange={(e) => updateBg({ color: e.target.value })}
+                  aria-label="Backing color"
+                />
+                <input
+                  type="text"
+                  className="form-input color-hex"
+                  value={bg.color}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (/^#[0-9a-fA-F]{0,6}$/.test(v)) {
+                      updateBg({ color: v });
+                    }
+                  }}
+                  maxLength={7}
+                  spellCheck={false}
+                />
+                <div className="pad-bg-presets">
+                  {[
+                    { label: "Black", value: "#000000" },
+                    { label: "White", value: "#ffffff" },
+                    { label: "Red", value: "#ef4444" },
+                    { label: "Blue", value: "#3b82f6" },
+                  ].map((p) => (
+                    <button
+                      key={p.label}
+                      type="button"
+                      className={`preset-pill ${bg.color === p.value ? "active" : ""}`}
+                      onClick={() => updateBg({ color: p.value })}
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+            <div className="wm-sliders">
+              <div className="form-field">
+                <label className="form-label">Backing opacity · {bg.opacity}%</label>
+                <input
+                  className="form-input slider"
+                  type="range"
+                  min={0}
+                  max={100}
+                  value={bg.opacity}
+                  onChange={(e) => updateBg({ opacity: Number(e.target.value) })}
+                />
+              </div>
+              <div className="form-field">
+                <label className="form-label">Backing padding · {bg.padding}px</label>
+                <input
+                  className="form-input slider"
+                  type="range"
+                  min={0}
+                  max={64}
+                  value={bg.padding}
+                  onChange={(e) => updateBg({ padding: Number(e.target.value) })}
+                />
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

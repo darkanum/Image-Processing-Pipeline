@@ -1,0 +1,815 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Image Processing Pipeline — Interview Briefing</title>
+  <style>
+    :root {
+      --bg: #0a0e1a;
+      --bg-2: #111827;
+      --bg-3: #1f2937;
+      --surface: #161b29;
+      --border: #2a3142;
+      --text: #f3f4f6;
+      --text-soft: #9ca3af;
+      --text-mute: #6b7280;
+      --primary: #3b82f6;
+      --primary-soft: #1e3a8a;
+      --success: #10b981;
+      --success-soft: #064e3b;
+      --warning: #f59e0b;
+      --warning-soft: #78350f;
+      --danger: #ef4444;
+      --danger-soft: #7f1d1d;
+      --code-bg: #0d1117;
+      --code-text: #e6edf3;
+      --code-keyword: #ff7b72;
+      --code-string: #a5d6ff;
+      --code-comment: #8b949e;
+      --code-func: #d2a8ff;
+      --code-type: #ffa657;
+      --accent-purple: #a78bfa;
+      --accent-cyan: #22d3ee;
+      --accent-pink: #f472b6;
+      --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", "Helvetica Neue", Arial, sans-serif;
+      --font-mono: "SF Mono", "Cascadia Code", "JetBrains Mono", "Fira Code", Consolas, monospace;
+    }
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      font-family: var(--font-sans);
+      background: var(--bg);
+      color: var(--text);
+      font-size: 14px;
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+    .page { max-width: 1180px; margin: 0 auto; padding: 36px 28px 80px; }
+    .header {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 18px 22px; background: var(--surface);
+      border: 1px solid var(--border); border-radius: 12px; margin-bottom: 28px;
+    }
+    .header-left { display: flex; align-items: center; gap: 14px; }
+    .logo {
+      width: 40px; height: 40px; border-radius: 10px;
+      background: linear-gradient(135deg, var(--primary) 0%, var(--accent-cyan) 100%);
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 700; font-size: 18px; color: #fff;
+    }
+    .header h1 { margin: 0; font-size: 17px; font-weight: 600; letter-spacing: -0.01em; }
+    .header .subtitle { color: var(--text-soft); font-size: 12px; margin-top: 2px; }
+    .header-stats { display: flex; gap: 16px; }
+    .stat { padding: 6px 12px; background: var(--bg-2); border: 1px solid var(--border); border-radius: 6px; font-size: 11px; color: var(--text-soft); }
+    .stat b { color: var(--text); font-weight: 600; }
+    .layout { display: grid; grid-template-columns: 220px 1fr; gap: 28px; }
+    .toc { position: sticky; top: 20px; align-self: start; padding: 18px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; }
+    .toc-title { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; color: var(--text-mute); text-transform: uppercase; margin-bottom: 12px; }
+    .toc ol { list-style: none; padding: 0; margin: 0; counter-reset: toc; }
+    .toc li { counter-increment: toc; margin: 2px 0; }
+    .toc a { display: flex; align-items: center; gap: 10px; padding: 7px 10px; color: var(--text-soft); text-decoration: none; font-size: 13px; border-radius: 6px; transition: background 0.15s, color 0.15s; }
+    .toc a:hover { background: var(--bg-2); color: var(--text); }
+    .toc a::before { content: counter(toc, decimal-leading-zero); font-family: var(--font-mono); font-size: 10px; color: var(--text-mute); min-width: 20px; }
+    .section { padding: 28px 30px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; margin-bottom: 24px; }
+    .section-head { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; padding-bottom: 14px; border-bottom: 1px solid var(--border); }
+    .section-num { width: 30px; height: 30px; border-radius: 8px; background: var(--primary-soft); color: var(--primary); display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 13px; }
+    .section h2 { margin: 0; font-size: 19px; font-weight: 600; letter-spacing: -0.01em; }
+    .section-desc { color: var(--text-soft); font-size: 13px; margin: -6px 0 18px 42px; }
+    .section h3 { font-size: 14px; font-weight: 600; color: var(--text); margin: 20px 0 8px; }
+    .section p { margin: 0 0 12px; color: var(--text-soft); font-size: 13.5px; line-height: 1.65; }
+    .section ul, .section ol { margin: 0 0 12px; padding-left: 22px; color: var(--text-soft); font-size: 13.5px; }
+    .section li { margin: 4px 0; }
+    .section code { font-family: var(--font-mono); font-size: 12px; background: var(--code-bg); color: var(--code-text); padding: 2px 6px; border-radius: 4px; }
+    .arch { background: var(--bg-2); border: 1px solid var(--border); border-radius: 10px; padding: 24px; margin: 12px 0 20px; }
+    .arch-row { display: flex; justify-content: space-around; align-items: center; gap: 20px; margin: 12px 0; }
+    .arch-col { display: flex; flex-direction: column; align-items: center; gap: 10px; min-width: 130px; }
+    .arch-box { width: 100%; padding: 14px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; text-align: center; }
+    .arch-box.primary { border-color: var(--primary); background: var(--primary-soft); }
+    .arch-box.success { border-color: var(--success); background: var(--success-soft); }
+    .arch-box.warning { border-color: var(--warning); background: var(--warning-soft); }
+    .arch-box.muted { opacity: 0.7; }
+    .arch-box-title { font-size: 12px; font-weight: 600; color: var(--text); }
+    .arch-box-sub { font-size: 10px; color: var(--text-soft); margin-top: 2px; }
+    .arch-box-tech { font-family: var(--font-mono); font-size: 10px; color: var(--text-soft); margin-top: 4px; opacity: 0.7; }
+    .arrow { display: flex; align-items: center; justify-content: center; color: var(--text-mute); font-size: 16px; font-weight: 700; min-width: 30px; }
+    .topology { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; margin: 12px 0 20px; }
+    .svc { padding: 14px; background: var(--bg-2); border: 1px solid var(--border); border-radius: 10px; }
+    .svc-name { font-weight: 600; font-size: 13px; color: var(--text); }
+    .svc-tech { font-family: var(--font-mono); font-size: 10px; color: var(--accent-cyan); margin: 4px 0 8px; }
+    .svc-ports { font-family: var(--font-mono); font-size: 10px; color: var(--text-mute); }
+    .svc-purpose { font-size: 11.5px; color: var(--text-soft); margin-top: 6px; }
+    .svc-badge { display: inline-block; padding: 2px 7px; font-size: 9px; border-radius: 4px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; }
+    .svc-badge.app { background: var(--primary-soft); color: var(--primary); }
+    .svc-badge.worker { background: var(--success-soft); color: var(--success); }
+    .svc-badge.db { background: var(--warning-soft); color: var(--warning); }
+    .flow { background: var(--bg-2); border: 1px solid var(--border); border-radius: 10px; padding: 20px; margin: 12px 0 20px; overflow-x: auto; }
+    .flow-row { display: flex; align-items: center; gap: 6px; min-width: max-content; }
+    .step { flex: 0 0 auto; padding: 10px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; min-width: 110px; text-align: center; }
+    .step .step-num { font-family: var(--font-mono); font-size: 10px; color: var(--accent-cyan); }
+    .step .step-label { font-size: 12px; font-weight: 600; color: var(--text); margin-top: 2px; }
+    .step .step-sub { font-size: 10px; color: var(--text-soft); margin-top: 2px; }
+    .step.api { border-color: var(--primary); }
+    .step.queue { border-color: var(--warning); }
+    .step.worker { border-color: var(--success); }
+    .step.store { border-color: var(--accent-purple); }
+    .decisions { display: flex; flex-direction: column; gap: 12px; margin: 12px 0; }
+    .decision { display: grid; grid-template-columns: 200px 1fr; gap: 14px; padding: 14px 16px; background: var(--bg-2); border: 1px solid var(--border); border-radius: 10px; border-left: 3px solid var(--primary); }
+    .decision.alt-1 { border-left-color: var(--accent-cyan); }
+    .decision.alt-2 { border-left-color: var(--accent-purple); }
+    .decision.alt-3 { border-left-color: var(--success); }
+    .decision.alt-4 { border-left-color: var(--warning); }
+    .decision.alt-5 { border-left-color: var(--danger); }
+    .decision.alt-6 { border-left-color: var(--accent-pink); }
+    .decision-title { font-size: 12px; font-weight: 600; color: var(--text); }
+    .decision-meta { font-size: 10px; font-family: var(--font-mono); color: var(--accent-cyan); margin-top: 3px; }
+    .decision-body { font-size: 12.5px; color: var(--text-soft); line-height: 1.55; }
+    .decision-body b { color: var(--text); font-weight: 500; }
+    .decision-body code { font-family: var(--font-mono); font-size: 11px; }
+    pre { background: var(--code-bg); color: var(--code-text); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; font-family: var(--font-mono); font-size: 11.5px; line-height: 1.55; overflow-x: auto; margin: 10px 0; }
+    .k { color: var(--code-keyword); }
+    .s { color: var(--code-string); }
+    .c { color: var(--code-comment); }
+    .f { color: var(--code-func); }
+    .t { color: var(--code-type); }
+    .twocol { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 10px 0; }
+    @media (max-width: 800px) { .layout { grid-template-columns: 1fr; } .toc { position: static; } .twocol { grid-template-columns: 1fr; } }
+    .callout { padding: 14px 16px; background: var(--bg-2); border: 1px solid var(--border); border-left: 3px solid var(--primary); border-radius: 8px; margin: 10px 0; }
+    .callout strong { color: var(--text); font-weight: 600; }
+    .callout p { margin: 0; font-size: 13px; color: var(--text-soft); }
+    .talking { background: linear-gradient(135deg, rgba(59,130,246,0.10) 0%, rgba(34,211,238,0.08) 100%); border: 1px solid var(--primary); border-radius: 12px; padding: 24px 28px; }
+    .talking h2 { color: var(--primary); }
+    .tp-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+    .tp-block h3 { font-size: 13px; color: var(--accent-cyan); margin: 16px 0 8px; text-transform: uppercase; letter-spacing: 0.06em; }
+    .tp-block ul { padding-left: 18px; font-size: 13px; }
+    .tp-block li { margin: 6px 0; }
+    @media (max-width: 800px) { .tp-grid { grid-template-columns: 1fr; } }
+    @media print { body { background: #fff; color: #000; } .section, .header, .toc, .talking { background: #fff; border-color: #ccc; } .toc { display: none; } .layout { grid-template-columns: 1fr; } .section { page-break-inside: avoid; } }
+    .muted { color: var(--text-mute); }
+    .accent { color: var(--accent-cyan); }
+    .ok { color: var(--success); }
+  </style>
+</head>
+<body>
+<div class="page">
+
+  <div class="header">
+    <div class="header-left">
+      <div class="logo">IP</div>
+      <div>
+        <h1>Real-Time Image Processing Pipeline</h1>
+        <div class="subtitle">Interview Briefing — Architecture, Topology, Decisions, and Rationale</div>
+      </div>
+    </div>
+    <div class="header-stats">
+      <div class="stat"><b>React</b> + Vite + TS</div>
+      <div class="stat"><b>Node</b> 20 + Express</div>
+      <div class="stat"><b>BullMQ</b> + Redis</div>
+      <div class="stat"><b>Firebase</b> Emulator</div>
+      <div class="stat"><b>sharp</b></div>
+    </div>
+  </div>
+
+  <div class="layout">
+    <nav class="toc">
+      <div class="toc-title">Sections</div>
+      <ol>
+        <li><a href="#sec-elevator">30-second elevator</a></li>
+        <li><a href="#sec-architecture">Architecture</a></li>
+        <li><a href="#sec-topology">Service topology</a></li>
+        <li><a href="#sec-flow">System flow</a></li>
+        <li><a href="#sec-functions">How the functions work</a></li>
+        <li><a href="#sec-production">Production hardening</a></li>
+        <li><a href="#sec-decisions">Design decisions</a></li>
+        <li><a href="#sec-talking">Talking points</a></li>
+        <li><a href="#sec-demo">Live demo URLs</a></li>
+      </ol>
+    </nav>
+
+    <main>
+
+      <section class="section" id="sec-elevator">
+        <div class="section-head">
+          <div class="section-num">01</div>
+          <h2>The 30-second elevator pitch</h2>
+        </div>
+        <div class="section-desc">If you only get one sentence in the interview, this is it.</div>
+
+        <p>A user pastes an image URL into a React UI. The Express API validates and enqueues a job. A BullMQ worker downloads the image, runs a <code>sharp</code> transform pipeline (resize, crop, rotate, watermark, encode), and uploads the result to Firebase Storage. The UI receives the result through a <b>Firestore real-time listener</b> — no polling. The whole thing is containerized, observable (Prometheus + structured logs + K8s probes), and hardened for production (API key, rate limit, CSP, graceful shutdown).</p>
+
+        <div class="twocol">
+          <div class="callout">
+            <p><strong>What problem does this solve?</strong> A "submit URL, get a transformed image back" pipeline that doesn't lock the browser, doesn't lose work on network errors, and scales horizontally by adding more workers.</p>
+          </div>
+          <div class="callout">
+            <p><strong>What makes it production-grade?</strong> API key auth, CORS lockdown, per-IP rate limits, hard timeouts, retries with backoff, TTL-based cleanup, Prometheus metrics, K8s probes, multi-strategy anti-bot downloader, OpenAPI 3.0.3 docs.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="sec-architecture">
+        <div class="section-head">
+          <div class="section-num">02</div>
+          <h2>Architecture</h2>
+        </div>
+        <div class="section-desc">Three-tier: <b>browser → API → worker</b>, with Firebase as the cross-cutting state layer.</div>
+
+        <div class="arch">
+          <div class="arch-row">
+            <div class="arch-col">
+              <div class="arch-box primary">
+                <div class="arch-box-title">Browser (React)</div>
+                <div class="arch-box-sub">SPA + Firestore SDK</div>
+                <div class="arch-box-tech">Vite + TypeScript</div>
+              </div>
+            </div>
+            <div class="arrow">→</div>
+            <div class="arch-col">
+              <div class="arch-box">
+                <div class="arch-box-title">API (Express)</div>
+                <div class="arch-box-sub">validates, enqueues, reads</div>
+                <div class="arch-box-tech">Node 20 + zod + helmet</div>
+              </div>
+            </div>
+            <div class="arrow">→</div>
+            <div class="arch-col">
+              <div class="arch-box warning">
+                <div class="arch-box-title">Redis</div>
+                <div class="arch-box-sub">BullMQ broker</div>
+                <div class="arch-box-tech">AOF persistence</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="arch-row">
+            <div class="arrow">↓</div>
+          </div>
+
+          <div class="arch-row">
+            <div class="arch-col">
+              <div class="arch-box success">
+                <div class="arch-box-title">Worker (BullMQ consumer)</div>
+                <div class="arch-box-sub">download → transform → upload</div>
+                <div class="arch-box-tech">Node 20 + sharp + undici</div>
+              </div>
+            </div>
+            <div class="arch-col">
+              <div class="arch-box">
+                <div class="arch-box-title">Firebase Emulator</div>
+                <div class="arch-box-sub">Firestore (state) + Storage (results)</div>
+                <div class="arch-box-tech">firebase-admin SDK</div>
+              </div>
+            </div>
+            <div class="arch-col">
+              <div class="arch-box muted">
+                <div class="arch-box-title">Source CDN</div>
+                <div class="arch-box-sub">any http(s) image URL</div>
+                <div class="arch-box-tech">with anti-bot headers</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="arch-row" style="margin-top: 6px;">
+            <div class="arch-col">
+              <div class="arch-box muted">
+                <div class="arch-box-title">/metrics · /health/ready · /docs</div>
+                <div class="arch-box-sub">Prom + K8s probes + Swagger UI</div>
+                <div class="arch-box-tech">scrape every 15s</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <h3>Why this shape?</h3>
+        <ul>
+          <li><b>Browser ↔ Firestore listener</b> — the worker is the only writer, the browser is the only reader. Clean write/read split, no polling, near-instant UI updates.</li>
+          <li><b>API is stateless</b> — it only validates and enqueues. Adding an API replica is a load-balancer config; no shared state.</li>
+          <li><b>Worker is stateless</b> — it consumes BullMQ jobs, downloads, transforms, uploads. Add a worker replica → linear throughput. Redis brokers the jobs.</li>
+          <li><b>Firebase Emulator</b> in dev means zero external dependencies — <code>docker compose up</code> and the whole stack runs locally with the same wire protocol as production.</li>
+        </ul>
+      </section>
+
+      <section class="section" id="sec-topology">
+        <div class="section-head">
+          <div class="section-num">03</div>
+          <h2>Service topology</h2>
+        </div>
+        <div class="section-desc">Five services, all from one <code>docker compose up</code>. Host ports are free ones; container-internal ports are standard.</div>
+
+        <div class="topology">
+          <div class="svc">
+            <span class="svc-badge app">App</span>
+            <div class="svc-name">frontend</div>
+            <div class="svc-tech">nginx + Vite bundle</div>
+            <div class="svc-ports">:8088 → 80</div>
+            <div class="svc-purpose">SPA shell. Serves the React build, proxies nothing — the browser talks to API and Firebase directly.</div>
+          </div>
+
+          <div class="svc">
+            <span class="svc-badge app">API</span>
+            <div class="svc-name">api</div>
+            <div class="svc-tech">Express + zod + helmet</div>
+            <div class="svc-ports">:3100 → 3001</div>
+            <div class="svc-purpose">Validates <code>{url, transform}</code>, enqueues BullMQ job, creates the Firestore doc, returns the record.</div>
+          </div>
+
+          <div class="svc">
+            <span class="svc-badge worker">Worker</span>
+            <div class="svc-name">worker</div>
+            <div class="svc-tech">BullMQ + sharp + undici</div>
+            <div class="svc-ports">internal only</div>
+            <div class="svc-purpose">Consumes jobs, downloads (with anti-bot fallback), transforms, uploads. Updates the same Firestore doc with progress.</div>
+          </div>
+
+          <div class="svc">
+            <span class="svc-badge db">Queue</span>
+            <div class="svc-name">redis</div>
+            <div class="svc-tech">redis:7-alpine</div>
+            <div class="svc-ports">:6390 → 6379</div>
+            <div class="svc-purpose">BullMQ broker. AOF persistence means in-flight jobs survive a Redis restart.</div>
+          </div>
+
+          <div class="svc">
+            <span class="svc-badge db">State</span>
+            <div class="svc-name">firebase-emulator</div>
+            <div class="svc-tech">Firestore + Storage + UI</div>
+            <div class="svc-ports">:4001 UI, :8085 / :9095 / :9200 services</div>
+            <div class="svc-purpose">Job state in Firestore, results in Storage. Real-time listener pushes updates to the browser.</div>
+          </div>
+        </div>
+
+        <h3>Network boundaries</h3>
+        <pre><span class="c"># All host ports are bound to 127.0.0.1 (IPv4 only) —</span>
+<span class="c"># Docker Desktop on Windows has a known IPv6 port-forwarding hang</span>
+<span class="c"># where the browser resolves localhost to ::1 first and waits.</span>
+
+frontend  :8088 → 127.0.0.1:80       (nginx)
+api       :3100 → 127.0.0.1:3001     (Express)
+firebase  :4001 → 127.0.0.1:4000     (UI)
+          :8085 → 127.0.0.1:8080     (Firestore)
+          :9095 → 127.0.0.1:9099     (Auth)
+          :9200 → 127.0.0.1:9199     (Storage)
+redis     :6390 → 127.0.0.1:6379     (Redis)
+worker    internal only              (no host port)</pre>
+
+        <h3>Why expose worker on no host port?</h3>
+        <p>The worker is a <b>consumer</b>, not a request server. It pulls from Redis. There's nothing for an external client to call on it — exposing a port would just be attack surface.</p>
+      </section>
+
+      <section class="section" id="sec-flow">
+        <div class="section-head">
+          <div class="section-num">04</div>
+          <h2>System flow</h2>
+        </div>
+        <div class="section-desc">Three flows to walk through: <b>happy path</b>, <b>progress updates</b>, and <b>error / retry</b>.</div>
+
+        <h3>A) Happy path — submit → complete in &lt;2s</h3>
+        <div class="flow">
+          <div class="flow-row">
+            <div class="step api">
+              <div class="step-num">1</div>
+              <div class="step-label">POST /api/jobs</div>
+              <div class="step-sub">zod validates body</div>
+            </div>
+            <div class="step-arrow">→</div>
+            <div class="step api">
+              <div class="step-num">2</div>
+              <div class="step-label">Firestore.create</div>
+              <div class="step-sub">status: pending</div>
+            </div>
+            <div class="step-arrow">→</div>
+            <div class="step queue">
+              <div class="step-num">3</div>
+              <div class="step-label">BullMQ.add</div>
+              <div class="step-sub">returns job id = doc id</div>
+            </div>
+            <div class="step-arrow">→</div>
+            <div class="step api">
+              <div class="step-num">4</div>
+              <div class="step-label">201 Created</div>
+              <div class="step-sub">returns full JobRecord</div>
+            </div>
+          </div>
+          <div class="flow-row" style="margin-top: 16px;">
+            <div class="step worker">
+              <div class="step-num">5</div>
+              <div class="step-label">download</div>
+              <div class="step-sub">3-strategy anti-bot</div>
+            </div>
+            <div class="step-arrow">→</div>
+            <div class="step worker">
+              <div class="step-num">6</div>
+              <div class="step-label">transform</div>
+              <div class="step-sub">sharp pipeline</div>
+            </div>
+            <div class="step-arrow">→</div>
+            <div class="step worker">
+              <div class="step-num">7</div>
+              <div class="step-label">upload</div>
+              <div class="step-sub">Storage bucket</div>
+            </div>
+            <div class="step-arrow">→</div>
+            <div class="step store">
+              <div class="step-num">8</div>
+              <div class="step-label">mark completed</div>
+              <div class="step-sub">Firestore: status=completed, resultUrl=…</div>
+            </div>
+          </div>
+        </div>
+
+        <h3>B) How the browser sees progress</h3>
+        <div class="flow">
+          <div class="flow-row">
+            <div class="step api">
+              <div class="step-label">SPA mounts</div>
+              <div class="step-sub">Firestore SDK opens listener</div>
+            </div>
+            <div class="step-arrow">→</div>
+            <div class="step store">
+              <div class="step-label">onSnapshot</div>
+              <div class="step-sub">Firestore pushes deltas</div>
+            </div>
+            <div class="step-arrow">→</div>
+            <div class="step api">
+              <div class="step-label">React re-renders</div>
+              <div class="step-sub">job cards update in &lt;100ms</div>
+            </div>
+          </div>
+        </div>
+
+        <p>The SPA never re-fetches. It just opens <code>onSnapshot(collection, …)</code> and the Firestore SDK pushes any change to the client. This is the same model Firebase Realtime Database uses — the worker writes, the browser reads, no polling anywhere.</p>
+
+        <h3>C) Error &amp; retry</h3>
+        <div class="flow">
+          <div class="flow-row">
+            <div class="step worker">
+              <div class="step-num">5</div>
+              <div class="step-label">download fails</div>
+              <div class="step-sub">e.g. 403 bot block</div>
+            </div>
+            <div class="step-arrow">→</div>
+            <div class="step worker">
+              <div class="step-num">5b</div>
+              <div class="step-label">next strategy</div>
+              <div class="step-sub">Chrome → Firefox → Safari</div>
+            </div>
+            <div class="step-arrow">→</div>
+            <div class="step store">
+              <div class="step-num">5c</div>
+              <div class="step-label">mark failed</div>
+              <div class="step-sub">errorMessage populated</div>
+            </div>
+            <div class="step-arrow">→</div>
+            <div class="step api">
+              <div class="step-num">5d</div>
+              <div class="step-label">UI shows retry</div>
+              <div class="step-sub">one-click resubmit</div>
+            </div>
+          </div>
+        </div>
+        <p>If the error is unrecoverable (bad URL, non-image, too large), the worker throws <code>UnrecoverableError</code> so BullMQ doesn't retry. Otherwise the job is retried with exponential backoff up to 3 attempts.</p>
+      </section>
+
+      <section class="section" id="sec-functions">
+        <div class="section-head">
+          <div class="section-num">05</div>
+          <h2>How the functions work</h2>
+        </div>
+        <div class="section-desc">A walkthrough of the four interesting pieces of code, in execution order.</div>
+
+        <h3>① Request validation — <code>api/jobs.ts</code></h3>
+        <pre><span class="k">const</span> <span class="f">createJobSchema</span> = z.<span class="f">object</span>({
+  url: z.<span class="t">string</span>().<span class="f">url</span>().<span class="f">max</span>(<span class="s">2048</span>)
+    .<span class="f">refine</span>(<span class="f">u</span> =&gt; {
+      <span class="k">const</span> p = <span class="k">new</span> <span class="t">URL</span>(u);
+      <span class="k">return</span> p.protocol === <span class="s">"http:"</span> || p.protocol === <span class="s">"https:"</span>;
+    }, { <span class="t">message</span>: <span class="s">"url must be http(s)"</span> }),
+  transform: <span class="t">transformSchema</span>.<span class="f">optional</span>(),
+});</pre>
+        <p>One zod schema serves two masters: the runtime validator in <code>jobs.ts</code> AND the OpenAPI spec generator. They cannot drift apart — both read the same source of truth.</p>
+
+        <h3>② BullMQ enqueue — <code>services/queue.ts</code> + <code>api/jobs.ts</code></h3>
+        <pre><span class="k">const</span> bullJob = <span class="k">await</span> queue.<span class="f">add</span>(<span class="t">QUEUE_NAME</span>, { url, transform });
+<span class="k">const</span> record = { id: bullJob.id, url, status: <span class="s">"pending"</span>, <span class="c">/* ... */</span> };
+<span class="k">await</span> <span class="f">createJobRecord</span>(record);   <span class="c">// Firestore write</span></pre>
+        <p>Why the BullMQ job id == Firestore doc id: the worker only knows the id; it can update the same Firestore document by id alone. No join logic, no transaction.</p>
+
+        <h3>③ Worker pipeline — <code>workers/imageWorker.ts</code></h3>
+        <pre><span class="c">// Step 1: download (3 anti-bot strategies)</span>
+downloaded = <span class="k">await</span> <span class="f">downloadImage</span>(url);
+<span class="c">// Step 2: report progress to Firestore</span>
+<span class="k">await</span> <span class="f">updateJobMetadata</span>(id, { bytes, format });
+<span class="c">// Step 3: transform — fixed pipeline order</span>
+transformed = <span class="k">await</span> <span class="f">transformImage</span>(downloaded.buffer, transform);
+<span class="c">// Step 4: upload result</span>
+resultUrl = <span class="k">await</span> <span class="f">uploadResult</span>(id, transformed.buffer, mime, fmt);
+<span class="c">// Step 5: mark completed</span>
+<span class="k">await</span> <span class="f">updateJobRecord</span>(id, { status: <span class="s">"completed"</span>, resultUrl, ... });</pre>
+        <p>The <b>transform pipeline</b> order is fixed (resize → rotate → flip → grayscale → crop → watermark → opacity → encode) so the operations compose predictably. Watermark positioning is computed from the <b>post-rotate, post-crop</b> dimensions so the watermark lands exactly where the user clicked even after rotation.</p>
+
+        <h3>④ The image processor — <code>services/imageProcessor.ts</code></h3>
+        <pre><span class="k">const</span> { width: postResizeW, height: postResizeH } = <span class="f">computePostResizeDims</span>(
+  srcW, srcH, spec.resize,
+);
+<span class="k">const</span> swapOnRotate = spec.rotation === <span class="s">90</span> || spec.rotation === <span class="s">270</span>;
+<span class="k">const</span> preCropW = swapOnRotate ? postResizeH : postResizeW;
+<span class="k">const</span> preCropH = swapOnRotate ? postResizeW : postResizeH;
+
+<span class="k">let</span> pipeline: <span class="t">Sharp</span> = <span class="f">applyResize</span>(sharp(input), spec.resize, srcW, srcH);
+<span class="k">if</span> (spec.rotation !== <span class="s">0</span>) pipeline = pipeline.<span class="f">rotate</span>(spec.rotation);
+<span class="k">if</span> (spec.grayscale) pipeline = pipeline.<span class="f">grayscale</span>();
+<span class="c">// ... crop, watermark (positioned on the post-rotate/crop frame), opacity, encode</span></pre>
+        <p>Two things worth calling out:</p>
+        <ul>
+          <li><b>Watermark positioning math</b> is done <i>before</i> building the pipeline — it needs the final frame size to compute the 9-zone anchor. We solve for the post-resize/rotate/crop dimensions first, then build the pipeline.</li>
+          <li><b>Watermark fits-to-image guard</b>: if the overlay is larger than the destination (font size 51 on a 400×400 image), sharp refuses to composite. The fix is to <i>resize the overlay down to fit</i> before compositing, then re-position it.</li>
+        </ul>
+
+        <h3>⑤ The downloader — <code>services/downloader.ts</code></h3>
+        <pre><span class="k">const</span> strategies = [
+  { name: <span class="s">"chrome-windows"</span>,  headers: { <span class="t">User-Agent</span>: <span class="s">"Chrome/120.0.0.0..."</span>, <span class="t">Sec-Ch-Ua</span>: <span class="s">"..."</span>, <span class="t">Referer</span>: <span class="s">"&lt;url host&gt;"</span> } },
+  { name: <span class="firefox-linux"</span>, headers: { <span class="t">User-Agent</span>: <span class="s">"Firefox/121..."</span>, <span class="c">// no Sec-Ch-Ua</span> } },
+  { name: <span class="s">"safari-macos"</span>,     headers: { <span class="t">User-Agent</span>: <span class="s">"Safari/17.2..."</span> } },
+];
+
+<span class="k">for</span> (<span class="k">const</span> strategy <span class="k">of</span> strategies) {
+  <span class="k">const</span> res = <span class="k">await</span> <span class="f">request</span>(url, { headers: strategy.headers });
+  <span class="k">if</span> (BOT_BLOCK.<span class="f">has</span>(res.statusCode)) <span class="k">continue</span>;  <span class="c">// try next</span>
+  <span class="k">if</span> (res.statusCode &gt;= <span class="s">400</span>) <span class="k">throw</span> <span class="t">NOT_FOUND</span>;   <span class="c">// 404 is real</span>
+  <span class="c">// ... read stream, return DownloadResult { ..., strategy }</span>
+}</pre>
+        <p>Many image CDNs reject a default <code>User-Agent: image-processing-pipeline/1.0</code> as a bot. Sending real browser headers (User-Agent, Accept, Accept-Language, Accept-Encoding, Sec-Fetch-*, Referer matching the host) clears ~95% of those checks. If one strategy fails with 403/429/503, we try the next. A real 404 is NOT retried (genuine not-found, not a bot block).</p>
+      </section>
+
+      <section class="section" id="sec-production">
+        <div class="section-head">
+          <div class="section-num">06</div>
+          <h2>Production hardening</h2>
+        </div>
+        <div class="section-desc">The four pillars: <b>security</b>, <b>observability</b>, <b>reliability</b>, <b>operational hygiene</b>.</div>
+
+        <div class="twocol">
+          <div>
+            <h3 class="ok">✓ Security</h3>
+            <ul>
+              <li>API key auth (<code>X-Api-Key</code>, constant-time compare, fail-closed)</li>
+              <li>CORS lockdown to an explicit allow-list</li>
+              <li>Helmet: CSP, HSTS (prod), X-Frame-Options, Referrer-Policy</li>
+              <li>Per-IP rate limit: 30 writes/min, 300 reads/min</li>
+              <li>Request body cap: 64 KB</li>
+              <li><code>x-powered-by</code> disabled</li>
+              <li>Container: <code>no-new-privileges</code>, non-root user, mem caps</li>
+            </ul>
+          </div>
+          <div>
+            <h3 class="ok">✓ Observability</h3>
+            <ul>
+              <li>Prometheus <code>/metrics</code>: HTTP histogram, request counter, jobs counter, active gauge, processing duration, image bytes, plus all default Node metrics</li>
+              <li>Structured JSON logs (pino) with per-request <code>requestId</code></li>
+              <li><code>X-Request-Id</code> response header on every request</li>
+              <li>K8s-style probes: <code>/health/live</code>, <code>/health/ready</code></li>
+              <li>OpenAPI 3.0.3 + Swagger UI at <code>/docs</code></li>
+            </ul>
+          </div>
+          <div>
+            <h3 class="ok">✓ Reliability</h3>
+            <ul>
+              <li>Per-job hard timeout (120s default)</li>
+              <li>Graceful SIGTERM shutdown — drain in-flight, force-exit after grace</li>
+              <li>TTL-based cleanup — old Firestore docs and Storage objects reaped hourly</li>
+              <li>Cursor-paginated job list (200 max) — bounded payload</li>
+              <li>BullMQ retries with <code>UnrecoverableError</code> for non-retryable failures</li>
+              <li>Auto-scaling watermark overlay to fit destination</li>
+            </ul>
+          </div>
+          <div>
+            <h3 class="ok">✓ Operational hygiene</h3>
+            <ul>
+              <li>Docker healthchecks on all long-running services</li>
+              <li>Graceful memory caps (<code>mem_limit</code> on each service)</li>
+              <li>Single <code>docker compose up</code> to run the entire stack</li>
+              <li>Health warnings at startup if <code>API_KEY</code> is missing in production</li>
+              <li><code>RUNBOOK.md</code> for common operator scenarios</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="sec-decisions">
+        <div class="section-head">
+          <div class="section-num">07</div>
+          <h2>Design decisions &amp; rationale</h2>
+        </div>
+        <div class="section-desc">The <i>why</i> behind each non-obvious choice. This is what makes the interview go well — the interviewer is going to ask "why this and not that".</div>
+
+        <div class="decisions">
+
+          <div class="decision alt-1">
+            <div>
+              <div class="decision-title">Why BullMQ + Redis and not in-process jobs?</div>
+              <div class="decision-meta">decision · queue</div>
+            </div>
+            <div class="decision-body">
+              <b>Horizontal scale.</b> In-process means a single Node process can only process one job at a time per worker. With BullMQ, the API enqueues, returns immediately, and any number of worker processes consume in parallel. AOF persistence means a Redis restart doesn't lose in-flight jobs. <b>Rejected alternative:</b> pg-boss (Postgres-based) — adds DB pressure; AWS SQS — vendor lock-in.
+            </div>
+          </div>
+
+          <div class="decision alt-2">
+            <div>
+              <div class="decision-title">Why Firestore for state and not a SQL table?</div>
+              <div class="decision-meta">decision · state</div>
+            </div>
+            <div class="decision-body">
+              <b>Real-time listener is a first-class feature.</b> Polling a SQL row every 500ms is wasteful and adds load. Firestore's <code>onSnapshot</code> is a WebSocket that pushes deltas. The browser subscribes once and just re-renders. We get "real-time updates for free" without writing a single line of pub/sub. <b>Rejected:</b> Postgres + socket.io — more code, more ops.
+            </div>
+          </div>
+
+          <div class="decision alt-3">
+            <div>
+              <div class="decision-title">Why <code>sharp</code> and not ImageMagick?</div>
+              <div class="decision-meta">decision · image processing</div>
+            </div>
+            <div class="decision-body">
+              <b>Native bindings, no shell-outs.</b> ImageMagick spawns a child process per call — slow, fragile, no streaming. <code>sharp</code> is a libvips binding with lazy evaluation: a chain of operations becomes a single C pipeline executed in one pass. Memory-mapped streaming means we never load the full image into JS. <b>Rejected:</b> Jimp (pure JS, 10× slower), canvas (no formats).
+            </div>
+          </div>
+
+          <div class="decision alt-4">
+            <div>
+              <div class="decision-title">Why the same schema drives validation AND the OpenAPI doc?</div>
+              <div class="decision-meta">decision · type safety</div>
+            </div>
+            <div class="decision-body">
+              <b>Single source of truth.</b> The zod schemas in <code>api/openapi.ts</code> are used by both the runtime validator (zod's <code>safeParse</code>) and the OpenAPI generator (<code>extendZodWithOpenApi</code>). The docs and the validator cannot drift — when you change a schema, both update. The runtime cost of the <code>.openapi()</code> decorator is zero; it just attaches metadata.
+            </div>
+          </div>
+
+          <div class="decision alt-5">
+            <div>
+              <div class="decision-title">Why a 3-strategy downloader and not just a real browser?</div>
+              <div class="decision-meta">decision · anti-bot</div>
+            </div>
+            <div class="decision-body">
+              <b>Cost &amp; complexity.</b> 95% of bot blocks are a User-Agent + Accept + Referer mismatch — solvable in undici. A headless browser (Playwright) adds ~300 MB of browser binaries to the worker image, ~5s per request cold start, and is way more code to test. The fallback would slot in as strategy #4 via dynamic <code>import('playwright')</code> if real production needs it.
+            </div>
+          </div>
+
+          <div class="decision alt-6">
+            <div>
+              <div class="decision-title">Why a single Express server and not a Lambda / FaaS?</div>
+              <div class="decision-meta">decision · runtime</div>
+            </div>
+            <div class="decision-body">
+              <b>Predictable cold-start + image processing &gt; 15s.</b> <code>sharp</code> + a 10 MB image can take 5–30 seconds. Most FaaS platforms charge by the second and have hard time limits. A containerized Express + worker has a fixed 120s budget, scales horizontally, and the worker can be sized exactly for the workload. <b>Rejected:</b> AWS Lambda (15-min timeout but expensive for sustained CPU), Cloud Run (good alternative in production).
+            </div>
+          </div>
+
+          <div class="decision alt-1">
+            <div>
+              <div class="decision-title">Why 3 separate workers for graceful shutdown — not 1 process?</div>
+              <div class="decision-meta">decision · ops</div>
+            </div>
+            <div class="decision-body">
+              <b>Independent lifecycles.</b> A bug in the image processor doesn't take the API down. Scaling the worker (CPU-heavy) is independent of scaling the API (latency-sensitive). Restart cycles are decoupled. <b>Rejected:</b> single monolith — easier to deploy, but one bad image blocks all submissions.
+            </div>
+          </div>
+
+          <div class="decision alt-4">
+            <div>
+              <div class="decision-title">Why code-split the frontend (React.lazy)?</div>
+              <div class="decision-meta">decision · perf</div>
+            </div>
+            <div class="decision-body">
+              <b>Bundle size &amp; time-to-interactive.</b> The full bundle was 515 KB — gzipped 141 KB. The Firebase SDK is the biggest dep and only needed once the form is submitted. Splitting it into a lazy-loaded <code>JobList</code> chunk drops the initial bundle to 163 KB (gz 52 KB) and the heavy chunk to 357 KB (gz 90 KB) — but only on demand. <b>TTI on first load is roughly 1/3 of the old value.</b>
+            </div>
+          </div>
+
+          <div class="decision alt-2">
+            <div>
+              <div class="decision-title">Why <code>undici</code> for the HTTP client and not <code>node-fetch</code> or <code>axios</code>?</div>
+              <div class="decision-meta">decision · runtime</div>
+            </div>
+            <div class="decision-body">
+              <b>It's the default in Node 20.</b> No dependency to install, no version-drift concerns, no shim layer over the underlying connection pool. Built on top of llhttp — one of the fastest HTTP parsers available. We just get connection pooling, HTTP/2, and proper streaming for free.
+            </div>
+          </div>
+
+          <div class="decision alt-3">
+            <div>
+              <div class="decision-title">Why <code>helmet</code> with CSP and not just default headers?</div>
+              <div class="decision-meta">decision · security</div>
+            </div>
+            <div class="decision-body">
+              <b>Defense in depth.</b> The browser already has a same-origin policy. CSP is a second layer: even if an attacker manages to inject a script (XSS via a future vulnerability), CSP blocks it from loading remote resources or sending data anywhere. The trade-off is more config (we had to relax <code>script-src</code> for Swagger UI) — that's a known cost, not a hidden one.
+            </div>
+          </div>
+
+        </div>
+      </section>
+
+      <section class="section talking" id="sec-talking">
+        <div class="section-head">
+          <div class="section-num" style="background: var(--primary); color: #fff;">08</div>
+          <h2>Talking points for the interview</h2>
+        </div>
+        <div class="section-desc" style="color: var(--text-soft);">Pre-canned lines you can drop in when the interviewer probes. Use them to sound confident, not memorized.</div>
+
+        <div class="tp-grid">
+          <div class="tp-block">
+            <h3>When they ask "why this stack?"</h3>
+            <ul>
+              <li>"I wanted each layer to do one thing well. <b>BullMQ</b> for the queue because it has the best Node ergonomics; <b>Firestore</b> for state because the real-time listener is a free win; <b>sharp</b> because it's the only sane way to process images in Node."</li>
+              <li>"I chose Firebase over a SQL DB specifically because I wanted the browser to subscribe to changes without polling — and <b>that decision saved me a WebSocket server</b>."</li>
+            </ul>
+
+            <h3>When they ask "how does it scale?"</h3>
+            <ul>
+              <li>"API is stateless — add a load balancer and N replicas. Worker is stateless — add N replicas, the queue load-balances. Redis becomes the bottleneck at &gt;10k in-flight jobs; at that scale you move to Redis Cluster."</li>
+              <li>"The cleanup loop is the only thing that's not horizontally scalable — for a 20-worker fleet you'd move it to a CronJob or use a leader-election lock."</li>
+            </ul>
+
+            <h3>When they ask "what would you do differently?"</h3>
+            <ul>
+              <li>"I'd add a <b>distributed rate limiter</b> — right now it's in-memory per API replica, so with 3 replicas the user gets 3× the rate limit. Swap in <code>rate-limit-redis</code> with a Redis token bucket."</li>
+              <li>"The downloader is HTTP-only. For real anti-bot at scale I'd add a headless-browser fallback (strategy #4) for the worst offenders."</li>
+            </ul>
+
+            <h3>When they ask "how do you debug prod?"</h3>
+            <ul>
+              <li>"Every request has an <code>X-Request-Id</code> header. It's in the log line, the response, and any error toast in the UI. I tell the user 'quote the request id' and I can grep one line from prod logs to find the full trace."</li>
+            </ul>
+          </div>
+
+          <div class="tp-block">
+            <h3>When they ask "what's the trickiest part?"</h3>
+            <ul>
+              <li>"The watermark positioning. Sharp's <code>composite</code> with gravity doesn't have a margin offset, and it trims the SVG render to the tight glyph bounds, so the last character gets clipped. I had to switch to a fixed-size SVG canvas with explicit room for descenders and explicit <code>left/top</code> instead of gravity."</li>
+              <li>"The watermark overflow case: if the watermark is larger than the image, sharp refuses to composite. The fix is to scale the overlay down to fit the destination first, then position it."</li>
+            </ul>
+
+            <h3>When they ask "how do you test?"</h3>
+            <ul>
+              <li>"76 tests across 6 files. The image-processor tests use sharp to build a tiny test PNG, run the transform, then re-read the output and assert dimensions/format. The downloader tests mock undici with a fake response. The OpenAPI doc has its own test that verifies all paths and schemas are registered."</li>
+              <li>"I leaned toward <i>contract tests</i> over <i>unit tests</i> — assert the public shape (the OpenAPI spec, the JobRecord JSON), not the internals."</li>
+            </ul>
+
+            <h3>When they ask "how do you ship this?"</h3>
+            <ul>
+              <li>"One <code>docker compose up --build</code> brings up all 5 services. CI runs typecheck + tests on every PR. The README has a hardening checklist for production: real API key, real Firebase project, ALLOWED_ORIGINS, TLS terminator in front of the API."</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="sec-demo">
+        <div class="section-head">
+          <div class="section-num">09</div>
+          <h2>Live demo URLs</h2>
+        </div>
+        <div class="section-desc">Open these in your browser to walk the interviewer through the actual running system.</div>
+
+        <div class="twocol">
+          <div>
+            <h3>The app</h3>
+            <ul>
+              <li><b>UI</b>: <a href="http://localhost:8088" style="color: var(--accent-cyan);">http://localhost:8088</a></li>
+              <li><b>API health</b>: <a href="http://localhost:3100/health/ready" style="color: var(--accent-cyan);">http://localhost:3100/health/ready</a></li>
+              <li><b>Prometheus metrics</b>: <a href="http://localhost:3100/metrics" style="color: var(--accent-cyan);">http://localhost:3100/metrics</a></li>
+              <li><b>Swagger UI</b>: <a href="http://localhost:3100/docs" style="color: var(--accent-cyan);">http://localhost:3100/docs</a></li>
+              <li><b>OpenAPI spec</b>: <a href="http://localhost:3100/docs.json" style="color: var(--accent-cyan);">http://localhost:3100/docs.json</a></li>
+              <li><b>Firebase UI</b>: <a href="http://localhost:4001" style="color: var(--accent-cyan);">http://localhost:4001</a></li>
+            </ul>
+          </div>
+          <div>
+            <h3>Test images (always work)</h3>
+            <pre><span class="c"># small square</span>
+https://picsum.photos/600/600
+
+<span class="c"># wide</span>
+https://picsum.photos/1920/1080
+
+<span class="c"># tall</span>
+https://picsum.photos/600/900
+
+<span class="c"># anti-bot (was the demo that broke)</span>
+https://fastcdn.hoyoverse.com/content-v2/hk4e/...
+    33ba003d789f70944b6a43363cc63a5d_8996176210161945347.jpg</pre>
+          </div>
+        </div>
+
+        <h3>Things to demo live</h3>
+        <ol>
+          <li>Open <code>/docs</code> → click <b>Authorize</b> → expand <b>POST /api/jobs</b> → <b>Try it out</b> → paste a URL + transform → <b>Execute</b> → see the 201 response with request id.</li>
+          <li>Open the UI → submit a job → watch it progress in real time without refreshing.</li>
+          <li>Open <code>/metrics</code> → search for <code>jobs_completed_total</code> → see the count increment after a job.</li>
+          <li>Submit the same job 30 times in a minute → see the 429 on the 31st (rate limit).</li>
+          <li>Submit a URL to a bot-blocked site → the downloader falls through to the next strategy.</li>
+        </ol>
+      </section>
+
+    </main>
+  </div>
+</div>
+</body>
+</html>

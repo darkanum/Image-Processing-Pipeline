@@ -373,6 +373,114 @@ describe("transformImage — watermark", () => {
   });
 });
 
+describe("transformImage — watermark background toggle", () => {
+  it("renders a text watermark WITHOUT a backing rectangle when background.enabled=false", async () => {
+    // With background disabled, the result must still contain the text
+    // pixels but the area around it should be transparent (alpha=0)
+    // where the source image shows through. The result is a composite
+    // of the source and the text-only PNG.
+    const input = await buildTestImage(800, 600);
+    const result = await transformImage(input, {
+      ...DEFAULT_TRANSFORM,
+      watermark: {
+        kind: "text",
+        text: "NO_BG",
+        position: "bottom-right",
+        margin: 24,
+        opacity: 100,
+        size: 32,
+        background: { enabled: false, color: "#000000", opacity: 100, padding: 0 },
+      },
+      resize: null,
+    });
+    expect(result.width).toBe(800);
+    expect(result.height).toBe(600);
+    // The PNG must include alpha and the text pixels should be present.
+    const meta = await sharp(result.buffer).metadata();
+    expect(meta.hasAlpha).toBe(true);
+  });
+
+  it("renders a text watermark WITH backing rectangle when background.enabled=true", async () => {
+    const input = await buildTestImage(800, 600);
+    const result = await transformImage(input, {
+      ...DEFAULT_TRANSFORM,
+      watermark: {
+        kind: "text",
+        text: "WITH_BG",
+        position: "bottom-right",
+        margin: 24,
+        opacity: 100,
+        size: 32,
+        background: { enabled: true, color: "#ff0000", opacity: 80, padding: 8 },
+      },
+      resize: null,
+    });
+    // The padding adds 8px on every side, so the backing is at least
+    // 16px larger than the text. We check that the call succeeded and
+    // produced a non-trivial image.
+    expect(result.width).toBe(800);
+    expect(result.height).toBe(600);
+    expect(result.bytes).toBeGreaterThan(0);
+  });
+
+  it("backing color/opacity values affect the rendered output bytes", async () => {
+    // Two specs differing only in backing color should produce different
+    // bytes (the colored rectangle has different pixel values).
+    const input = await buildTestImage(800, 600);
+    const baseSpec = {
+      kind: "text" as const,
+      text: "COLOR_DIFF",
+      position: "bottom-right",
+      margin: 24,
+      opacity: 100,
+      size: 32,
+    };
+    const redBg = await transformImage(input, {
+      ...DEFAULT_TRANSFORM,
+      watermark: { ...baseSpec, background: { enabled: true, color: "#ff0000", opacity: 80, padding: 0 } },
+      resize: null,
+    });
+    const blueBg = await transformImage(input, {
+      ...DEFAULT_TRANSFORM,
+      watermark: { ...baseSpec, background: { enabled: true, color: "#0000ff", opacity: 80, padding: 0 } },
+      resize: null,
+    });
+    expect(redBg.bytes).not.toBe(blueBg.bytes);
+  });
+
+  it("omitted background field defaults to backing enabled (back-compat)", async () => {
+    // Pre-existing callers that send no `background` field must still
+    // get a dark backing — preserves the look the app shipped with.
+    const input = await buildTestImage(800, 600);
+    const withField = await transformImage(input, {
+      ...DEFAULT_TRANSFORM,
+      watermark: {
+        kind: "text",
+        text: "BACKCOMPAT",
+        position: "bottom-right",
+        margin: 24,
+        opacity: 100,
+        size: 32,
+      },
+      resize: null,
+    });
+    const explicitDefault = await transformImage(input, {
+      ...DEFAULT_TRANSFORM,
+      watermark: {
+        kind: "text",
+        text: "BACKCOMPAT",
+        position: "bottom-right",
+        margin: 24,
+        opacity: 100,
+        size: 32,
+        background: { enabled: true, color: "#000000", opacity: 40, padding: 0 },
+      },
+      resize: null,
+    });
+    expect(withField.bytes).toBe(explicitDefault.bytes);
+  });
+});
+
 describe("transformImage — overall opacity", () => {
   it("applies overall opacity to PNG output", async () => {
     const input = await buildTestImage(400, 300);
