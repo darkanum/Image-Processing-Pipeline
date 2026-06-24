@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, act } from "@testing-library/react";
 import { JobForm } from "../components/JobForm";
 
 describe("JobForm", () => {
@@ -250,5 +250,100 @@ describe("JobForm", () => {
     fireEvent.change(customInput, { target: { value: "60" } });
     const afterBtn = screen.getByRole("button", { name: /after rotation/i }) as HTMLButtonElement;
     expect(afterBtn.getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("bulk URL mode is hidden by default and shown after clicking the toggle", () => {
+    render(<JobForm apiUrl="" onCreated={undefined} />);
+    // Single mode by default — the single URL input is present
+    expect(screen.getByLabelText(/^image url$/i)).toBeTruthy();
+    expect(screen.queryByLabelText(/^image urls$/i)).toBeNull();
+    // Switch to bulk
+    fireEvent.click(screen.getByRole("button", { name: /^bulk$/i }));
+    expect(screen.queryByLabelText(/^image url$/i)).toBeNull();
+    expect(screen.getByLabelText(/^image urls$/i)).toBeTruthy();
+  });
+
+  it("bulk textarea counts valid and invalid URLs, ignoring blank lines and # comments", () => {
+    render(<JobForm apiUrl="" onCreated={undefined} />);
+    fireEvent.click(screen.getByRole("button", { name: /^bulk$/i }));
+    const textarea = screen.getByLabelText(/^image urls$/i) as HTMLTextAreaElement;
+    fireEvent.change(textarea, {
+      target: {
+        value: [
+          "https://picsum.photos/800/600",     // valid
+          "",                                   // blank — ignored
+          "# this is a comment — ignored",     // comment — ignored
+          "https://picsum.photos/600/600",    // valid
+          "not-a-url",                          // invalid
+          "ftp://example.com/img.png",         // invalid (ftp protocol)
+        ].join("\n"),
+      },
+    });
+    // The validation summary should show 2 ready, 2 invalid
+    const help = screen.getByText(/ready.*invalid/i);
+    expect(help.textContent).toMatch(/2 ready/);
+    expect(help.textContent).toMatch(/2 invalid/);
+    // The submit button should read "Process 2 images"
+    const submitBtn = screen.getByRole("button", { name: /process \d+ image/i }) as HTMLButtonElement;
+    expect(submitBtn.textContent).toMatch(/Process 2 images/);
+  });
+
+  it("bulk submit calls onCreated once per valid URL, with the same transform for all", async () => {
+    const onCreated = vi.fn();
+    // Stub fetch so each POST returns a unique job id
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      return new Response(
+        JSON.stringify({ id: `job-for-${body.url}`, url: body.url, status: "pending" }),
+        { status: 201, headers: { "content-type": "application/json" } },
+      );
+    });
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    try {
+      render(<JobForm apiUrl="" onCreated={onCreated} />);
+      fireEvent.click(screen.getByRole("button", { name: /^bulk$/i }));
+      const textarea = screen.getByLabelText(/^image urls$/i) as HTMLTextAreaElement;
+      fireEvent.change(textarea, {
+        target: {
+          value: [
+            "https://picsum.photos/800/600",
+            "https://picsum.photos/1920/1080",
+            "https://picsum.photos/600/600",
+          ].join("\n"),
+        },
+      });
+      const submitBtn = screen.getByRole("button", { name: /process 3 images/i });
+      await act(async () => {
+        fireEvent.click(submitBtn);
+        // Wait for the async loop to finish — each fetch resolves
+        // immediately, so a few ticks is enough.
+        await new Promise((r) => setTimeout(r, 50));
+      });
+      // fetch called once per URL
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+      // onCreated called once per URL
+      expect(onCreated).toHaveBeenCalledTimes(3);
+      const submittedUrls = fetchMock.mock.calls.map(([, init]) => {
+        const body = JSON.parse(String((init as RequestInit | undefined)?.body ?? "{}"));
+        return body.url as string;
+      });
+      expect(submittedUrls).toEqual([
+        "https://picsum.photos/800/600",
+        "https://picsum.photos/1920/1080",
+        "https://picsum.photos/600/600",
+      ]);
+      // All three calls used the same transform (rotation: 0 default)
+      const transforms = fetchMock.mock.calls.map(([, init]) => {
+        const body = JSON.parse(String((init as RequestInit | undefined)?.body ?? "{}"));
+        return body.transform as Record<string, unknown>;
+      });
+      for (const t of transforms) {
+        expect(t.rotation).toBe(0);
+        expect(t.quality).toBe(82);
+      }
+    } finally {
+      globalThis.fetch = origFetch;
+    }
   });
 });

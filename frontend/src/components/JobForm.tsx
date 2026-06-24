@@ -102,12 +102,39 @@ const RESIZE_MODES: { value: ResizeMode; label: string; hint: string }[] = [
 export const JobForm = ({ apiUrl: _apiUrl, onCreated }: JobFormProps): JSX.Element => {
   void _apiUrl;
   const [url, setUrl] = useState<string>("https://picsum.photos/800/600");
+  const [bulkMode, setBulkMode] = useState<boolean>(false);
+  const [bulkText, setBulkText] = useState<string>("");
   const [transform, setTransform] = useState<TransformSpec>(DEFAULT_TRANSFORM);
   const [submitting, setSubmitting] = useState<boolean>(false);
+  const [submitProgress, setSubmitProgress] = useState<{ done: number; total: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [requestId, setRequestId] = useState<string | null>(null);
 
   const urlCheck = useMemo(() => checkUrl(url), [url]);
+
+  // Parse the bulk textarea into a list of {url, line, valid} entries.
+  // - Trims whitespace from each line
+  // - Skips empty lines and lines starting with "#" (comments)
+  // - Validates each URL with checkUrl so we can show per-line errors
+  const bulkEntries = useMemo(() => {
+    if (!bulkText) return [] as Array<{ url: string; line: number; valid: boolean; reason?: string }>;
+    return bulkText
+      .split(/\r?\n/)
+      .map((raw, idx) => ({ raw, line: idx + 1 }))
+      .filter(({ raw }) => raw.trim() !== "" && !raw.trim().startsWith("#"))
+      .map(({ raw, line }) => {
+        const trimmed = raw.trim();
+        const check = checkUrl(trimmed);
+        return {
+          url: trimmed,
+          line,
+          valid: check.kind !== "err",
+          reason: check.kind === "err" ? check.reason : undefined,
+        };
+      });
+  }, [bulkText]);
+  const bulkValidCount = bulkEntries.filter((e) => e.valid).length;
+  const bulkInvalidCount = bulkEntries.length - bulkValidCount;
 
   // Resolved resize — defaults to the current resize spec, or a fresh
   // DEFAULT_RESIZE if null. We work on a concrete object so the inputs
@@ -162,12 +189,56 @@ export const JobForm = ({ apiUrl: _apiUrl, onCreated }: JobFormProps): JSX.Eleme
 
   const handleSubmit = async (e: FormEvent<HTMLFormElement>): Promise<void> => {
     e.preventDefault();
+    setError(null);
+    setRequestId(null);
+
+    // ── Bulk mode: one job per URL, same transform for all ──────────
+    if (bulkMode) {
+      const validEntries = bulkEntries.filter((e) => e.valid);
+      if (validEntries.length === 0) {
+        setError("Add at least one valid URL (one per line).");
+        return;
+      }
+      setSubmitting(true);
+      setSubmitProgress({ done: 0, total: validEntries.length });
+      const failures: Array<{ line: number; url: string; reason: string }> = [];
+      try {
+        for (let i = 0; i < validEntries.length; i++) {
+          const entry = validEntries[i]!;
+          try {
+            const job = await apiRequest<{ id: string }>("/jobs", {
+              method: "POST",
+              body: { url: entry.url, transform },
+            });
+            onCreated?.(job);
+          } catch (err) {
+            const reason = err instanceof ApiError
+              ? `HTTP ${err.status}: ${err.message}`
+              : err instanceof Error ? err.message : String(err);
+            failures.push({ line: entry.line, url: entry.url, reason });
+          }
+          setSubmitProgress({ done: i + 1, total: validEntries.length });
+        }
+        if (failures.length > 0) {
+          const first = failures[0]!;
+          setError(
+            `${failures.length} of ${validEntries.length} failed. First: line ${first.line} — ${first.reason}`,
+          );
+        } else {
+          setBulkText("");
+        }
+      } finally {
+        setSubmitting(false);
+        setSubmitProgress(null);
+      }
+      return;
+    }
+
+    // ── Single mode: one job ───────────────────────────────────────
     if (urlCheck.kind === "err") {
       setError(urlCheck.reason);
       return;
     }
-    setError(null);
-    setRequestId(null);
     setSubmitting(true);
     try {
       const payload: { url: string; transform: TransformSpec } = {
@@ -193,56 +264,121 @@ export const JobForm = ({ apiUrl: _apiUrl, onCreated }: JobFormProps): JSX.Eleme
     }
   };
 
-  const submitDisabled = submitting || urlCheck.kind === "err" || url.trim() === "";
+  const submitDisabled = submitting || (bulkMode
+    ? bulkValidCount === 0
+    : urlCheck.kind === "err" || url.trim() === "");
 
   return (
     <form className="job-form v2" onSubmit={handleSubmit} noValidate>
       {/* ── Source URL ───────────────────────────────────────────────── */}
       <div className="form-block">
-        <label className="form-label" htmlFor="url-input">Image URL</label>
-        <div className="url-row">
-          <input
-            id="url-input"
-            className="form-input"
-            type="url"
-            inputMode="url"
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            placeholder="https://example.com/image.jpg"
-            aria-describedby="url-help"
-            aria-invalid={urlCheck.kind === "err"}
-            autoComplete="off"
-            spellCheck={false}
-            required
-          />
-          <button
-            type="submit"
-            className="primary"
-            disabled={submitDisabled}
-            aria-busy={submitting}
-          >
-            {submitting ? "Submitting…" : "Process image"}
-          </button>
-        </div>
-        <div id="url-help" className={`url-validation ${urlCheck.kind}`} aria-live="polite">
-          {urlCheck.kind === "ok" && <>✓ Will fetch from {urlCheck.host}</>}
-          {urlCheck.kind === "warn" && <>⚠ {urlCheck.reason}</>}
-          {urlCheck.kind === "err" && <>✕ {urlCheck.reason}</>}
-          {urlCheck.kind === "idle" && <>Paste any http(s) image URL — or pick one below</>}
-        </div>
-        <div className="preset-pills" aria-label="Quick picks">
-          {QUICK_PICKS.map((p) => (
+        <div className="url-head">
+          <label className="form-label" htmlFor={bulkMode ? "bulk-url-input" : "url-input"}>
+            {bulkMode ? "Image URLs" : "Image URL"}
+          </label>
+          <div className="seg-buttons" role="radiogroup" aria-label="URL input mode">
             <button
-              key={p.url}
               type="button"
-              className={`preset-pill ${url === p.url ? "active" : ""}`}
-              onClick={() => setUrl(p.url)}
-              aria-pressed={url === p.url}
+              className={`seg-btn ${!bulkMode ? "active" : ""}`}
+              onClick={() => setBulkMode(false)}
+              aria-pressed={!bulkMode}
             >
-              {p.label}
+              Single
             </button>
-          ))}
+            <button
+              type="button"
+              className={`seg-btn ${bulkMode ? "active" : ""}`}
+              onClick={() => setBulkMode(true)}
+              aria-pressed={bulkMode}
+            >
+              Bulk
+            </button>
+          </div>
         </div>
+        {bulkMode ? (
+          <>
+            <textarea
+              id="bulk-url-input"
+              className="form-input bulk-url-textarea"
+              value={bulkText}
+              onChange={(e) => setBulkText(e.target.value)}
+              placeholder={"One URL per line, e.g.\nhttps://picsum.photos/800/600\nhttps://picsum.photos/1920/1080\n# lines starting with # are ignored"}
+              rows={5}
+              spellCheck={false}
+              autoComplete="off"
+              aria-describedby="bulk-url-help"
+            />
+            <div id="bulk-url-help" className="url-validation" aria-live="polite">
+              {bulkEntries.length === 0
+                ? "Paste one URL per line. Lines starting with # are ignored."
+                : bulkInvalidCount === 0
+                  ? <>✓ {bulkValidCount} URL{bulkValidCount === 1 ? "" : "s"} ready — same transform will be applied to all of them.</>
+                  : <span className="warn">⚠ {bulkValidCount} ready, {bulkInvalidCount} invalid (check protocol / format). Invalid lines will be skipped.</span>}
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="url-row">
+              <input
+                id="url-input"
+                className="form-input"
+                type="url"
+                inputMode="url"
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                placeholder="https://example.com/image.jpg"
+                aria-describedby="url-help"
+                aria-invalid={urlCheck.kind === "err"}
+                autoComplete="off"
+                spellCheck={false}
+                required
+              />
+              <button
+                type="submit"
+                className="primary"
+                disabled={submitDisabled}
+                aria-busy={submitting}
+              >
+                {submitting ? "Submitting…" : "Process image"}
+              </button>
+            </div>
+            <div id="url-help" className={`url-validation ${urlCheck.kind}`} aria-live="polite">
+              {urlCheck.kind === "ok" && <>✓ Will fetch from {urlCheck.host}</>}
+              {urlCheck.kind === "warn" && <>⚠ {urlCheck.reason}</>}
+              {urlCheck.kind === "err" && <>✕ {urlCheck.reason}</>}
+              {urlCheck.kind === "idle" && <>Paste any http(s) image URL — or pick one below</>}
+            </div>
+            <div className="preset-pills" aria-label="Quick picks">
+              {QUICK_PICKS.map((p) => (
+                <button
+                  key={p.url}
+                  type="button"
+                  className={`preset-pill ${url === p.url ? "active" : ""}`}
+                  onClick={() => setUrl(p.url)}
+                  aria-pressed={url === p.url}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+        {bulkMode && (
+          <div className="url-row bulk-submit-row">
+            <button
+              type="submit"
+              className="primary"
+              disabled={submitDisabled}
+              aria-busy={submitting}
+            >
+              {submitting && submitProgress
+                ? `Submitting ${submitProgress.done} / ${submitProgress.total}…`
+                : bulkValidCount === 0
+                  ? "Process images"
+                  : `Process ${bulkValidCount} image${bulkValidCount === 1 ? "" : "s"}`}
+            </button>
+          </div>
+        )}
       </div>
 
       {/* ── Output format & quality ─────────────────────────────────── */}

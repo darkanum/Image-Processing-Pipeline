@@ -369,6 +369,29 @@ select.form-input {
 .url-row .form-input { font-size: 14px; }
 .url-row .primary { white-space: nowrap; padding: 9px 18px; }
 
+/* Bulk URL textarea (replaces the single input in bulk mode) */
+.bulk-url-textarea {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.45;
+  min-height: 96px;
+  resize: vertical;
+  width: 100%;
+  padding: 10px 12px;
+}
+.bulk-submit-row {
+  margin-top: 10px;
+  grid-template-columns: 1fr;
+}
+.url-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.url-head .form-label { margin: 0; }
+
 .url-validation {
   margin-top: -4px;
   font-size: 12px;
