@@ -1265,35 +1265,38 @@ button.primary:disabled { opacity: 0.5; cursor: not-allowed; }
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
 }
 
-/* ── Slider restyle: bigger thumb, clear filled track, value bubble ──
+/* ── Slider restyle: bigger thumb, native filled track, value bubble ──
    The default <input type="range"> thumb is tiny (~14px) and easy to miss.
-   We override the thumb to 22px and add a clear filled-track on the left
-   of the thumb via background-size + accent-color. Browsers handle the
-   specifics via ::-webkit-slider-runnable-track / ::-moz-range-track. */
+   Strategy:
+     - Keep the input at its natural rendering (so accent-color paints
+       the filled portion of the track natively — no JS sync needed).
+     - Use a 22px thumb (sized to be easy to grab) with a primary-color
+       border, and vertically center it on an 8px-tall track.
+     - The 24px total track height leaves 8px of padding on each side
+       so the thumb doesn't get clipped at the top/bottom. */
 .slider input[type="range"],
 input[type="range"].form-input.slider {
-  -webkit-appearance: none;
-  appearance: none;
   width: 100%;
-  height: 8px;
-  border-radius: 4px;
-  background: linear-gradient(
-    to right,
-    var(--primary) 0%,
-    var(--primary) var(--range-fill, 50%),
-    var(--surface-3) var(--range-fill, 50%),
-    var(--surface-3) 100%
-  );
+  height: 24px;
+  background: transparent;
   outline: none;
   padding: 0;
   border: none;
-  margin: 8px 0;
+  margin: 0;
   cursor: pointer;
   accent-color: var(--primary);
 }
 .slider input[type="range"]:focus-visible,
 input[type="range"].form-input.slider:focus-visible {
   box-shadow: var(--focus-ring);
+}
+/* Webkit: custom track + thumb */
+.slider input[type="range"]::-webkit-slider-runnable-track,
+input[type="range"].form-input.slider::-webkit-slider-runnable-track {
+  height: 8px;
+  background: var(--surface-3);
+  border-radius: 4px;
+  border: none;
 }
 .slider input[type="range"]::-webkit-slider-thumb,
 input[type="range"].form-input.slider::-webkit-slider-thumb {
@@ -1304,6 +1307,7 @@ input[type="range"].form-input.slider::-webkit-slider-thumb {
   border-radius: 50%;
   background: var(--surface);
   border: 3px solid var(--primary);
+  margin-top: -7px; /* center 22px thumb on 8px track: (22-8)/2 = 7 */
   cursor: grab;
   box-shadow: var(--shadow-sm);
   transition: transform 0.1s, box-shadow 0.1s;
@@ -1318,20 +1322,23 @@ input[type="range"].form-input.slider::-webkit-slider-thumb:active {
   cursor: grabbing;
   transform: scale(1.1);
 }
+/* Firefox: custom track + thumb */
+.slider input[type="range"]::-moz-range-track,
+input[type="range"].form-input.slider::-moz-range-track {
+  height: 8px;
+  background: var(--surface-3);
+  border-radius: 4px;
+  border: none;
+}
 .slider input[type="range"]::-moz-range-thumb,
 input[type="range"].form-input.slider::-moz-range-thumb {
-  width: 22px;
-  height: 22px;
+  width: 16px; /* moz ignores border in box size; add via border for visual match */
+  height: 16px;
   border-radius: 50%;
   background: var(--surface);
   border: 3px solid var(--primary);
   cursor: grab;
   box-shadow: var(--shadow-sm);
-}
-.slider input[type="range"]::-moz-range-track,
-input[type="range"].form-input.slider::-moz-range-track {
-  background: transparent;
-  height: 8px;
 }
 
 /* ── Form select (legacy) ──────────────────────────────────────── */
