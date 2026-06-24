@@ -496,6 +496,23 @@ export const JobForm = ({ apiUrl: _apiUrl, onCreated }: JobFormProps): JSX.Eleme
             </div>
           </div>
         </div>
+        <div className="adjust-opacity">
+          <label className="form-label">
+            Image opacity <span className="form-label-value">{transform.opacity}%</span>
+          </label>
+          <input
+            className="form-input slider"
+            type="range"
+            min={0}
+            max={100}
+            value={transform.opacity}
+            onChange={(e) => setTransformPart("opacity", Number(e.target.value))}
+            aria-label="Image opacity"
+          />
+          <div className="hint">
+            Fades the whole image. <code>PNG</code> keeps true alpha; <code>JPEG</code>/<code>WebP</code> approximate with a multiply blend against black.
+          </div>
+        </div>
       </div>
 
       {error && (

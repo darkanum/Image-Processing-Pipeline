@@ -579,6 +579,33 @@ select.form-input {
   gap: 14px;
 }
 .adjust-field { display: flex; flex-direction: column; gap: 6px; }
+.adjust-opacity {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+.adjust-opacity .form-label {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+.form-label-value {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  color: var(--text);
+  font-weight: 500;
+  font-size: 12px;
+}
+.adjust-opacity .hint code {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  background: var(--surface-2);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 11px;
+  color: var(--text-soft);
+}
 .seg-buttons {
   display: inline-flex;
   background: var(--surface-2);

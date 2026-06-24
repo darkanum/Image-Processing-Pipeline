@@ -127,4 +127,20 @@ describe("JobForm", () => {
     // Default is Off
     expect(screen.queryByLabelText(/padding background color/i)).toBeNull();
   });
+
+  it("shows the image opacity slider with the default 100%", () => {
+    render(<JobForm apiUrl="" onCreated={undefined} />);
+    const slider = screen.getByLabelText(/image opacity/i) as HTMLInputElement;
+    expect(slider).toBeTruthy();
+    expect(slider.type).toBe("range");
+    expect(slider.value).toBe("100");
+  });
+
+  it("image opacity slider updates the visible value", () => {
+    render(<JobForm apiUrl="" onCreated={undefined} />);
+    const slider = screen.getByLabelText(/image opacity/i) as HTMLInputElement;
+    fireEvent.change(slider, { target: { value: "42" } });
+    // The percentage label updates
+    expect(screen.getByText("42%")).toBeTruthy();
+  });
 });
