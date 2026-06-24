@@ -783,13 +783,15 @@ describe("transformImage — watermark placement (pre vs post rotation)", () => 
     return { count, topY, bottomY, leftX, rightX, W, H };
   };
 
-  it("pre-rotation: watermark lands at the visual bottom-right of the final image, text tilted to match the rotation", async () => {
-    // 90° rotation: the user picked "bottom-right" on the FINAL image.
-    // The watermark is composited at the corresponding pre-rotation
-    // position (via inverse-rotation mapping) so that after the image
-    // is rotated, the watermark lands at the visual bottom-right of
-    // the final image. The text itself is tilted by 90° because the
-    // rotation rotates both the image and the watermark together.
+  it("pre-rotation: watermark is composited on the source image, then rotates with the image", async () => {
+    // Pre-rotation places the watermark at the user-specified position
+    // of the SOURCE image (e.g. "bottom-right" of the 600x400 source),
+    // then the rotation rotates the image+watermark together. For 90°
+    // CCW rotation, the source's right edge becomes the top of the
+    // canvas and the source's bottom edge becomes the right edge —
+    // so the source's bottom-right corner (the watermark position)
+    // ends up in the TOP-RIGHT of the 400x600 post-rotation canvas,
+    // not the bottom-right.
     const input = await buildTestImage(600, 400, { r: 80, g: 140, b: 200 });
     const result = await transformImage(input, {
       ...DEFAULT_TRANSFORM,
@@ -810,12 +812,14 @@ describe("transformImage — watermark placement (pre vs post rotation)", () => 
     expect(result.height).toBe(600);
     const wm = await locateWatermark(result);
     expect(wm.count).toBeGreaterThan(0);
-    // The watermark is at the visual bottom-right of the final image
-    // (bottom-right quadrant of the 400x600 canvas).
+    // The watermark should NOT be at the visual bottom-right of the
+    // post-rotation canvas (that's where post-rotation placement
+    // would put it). The source's bottom-right ends up in the top
+    // area of the canvas after 90° CCW rotation.
     const horizCenter = wm.W / 2;
     const vertCenter = wm.H / 2;
     const inBottomRightQuadrant = wm.leftX > horizCenter && wm.topY > vertCenter;
-    expect(inBottomRightQuadrant).toBe(true);
+    expect(inBottomRightQuadrant).toBe(false);
   });
 
   it("post-rotation: watermark stays upright at the user-specified position of the post-rotation canvas", async () => {
@@ -946,20 +950,13 @@ describe("transformImage — watermark placement (pre vs post rotation)", () => 
     expect(wm.topY).toBeGreaterThan(wm.H * 0.5);
   });
 
-  it("pre-rotation + non-90 angle: watermark lands at the visual bottom-right of the larger post-rotation canvas", async () => {
-    // 43° rotation with pre-rotation placement: the user picks
-    // "bottom-right" on the FINAL image. The watermark is composited
-    // at the pre-rotation position that maps (via inverse rotation) to
-    // the visual bottom-right of the post-rotation canvas. After the
-    // rotation, the watermark is at the visual bottom-right of the
-    // final image, with the text tilted by 43°.
-    //
-    // NOTE: for rotations where the post-rotation canvas grows much
-    // larger than the pre-rotation image, the inverse-mapped position
-    // can fall outside the pre-rotation image and the watermark gets
-    // clipped. This is a fundamental limitation of the pre-rotation
-    // approach — for those cases the user should switch to
-    // "post-rotation" placement.
+  it("pre-rotation + non-90 angle: watermark at source's bottom-right rotates with the image to a non-corner position", async () => {
+    // For pre-rotation, the watermark is placed at the source's
+    // bottom-right, then both rotate together. For 43° rotation the
+    // source's bottom-right ends up somewhere in the middle/edge of
+    // the post-rotation canvas — not at any of the 4 corners of the
+    // canvas. The point of this test is just to confirm the watermark
+    // IS present and survives the rotation (not at a specific corner).
     const input = await buildTestImage(600, 400, { r: 80, g: 140, b: 200 });
     const result = await transformImage(input, {
       ...DEFAULT_TRANSFORM,
@@ -980,10 +977,13 @@ describe("transformImage — watermark placement (pre vs post rotation)", () => 
     expect(result.height).toBeGreaterThan(400);
     const wm = await locateWatermark(result);
     expect(wm.count).toBeGreaterThan(0);
-    // The watermark should be in the bottom-right quadrant of the
-    // post-rotation canvas (the visual bottom-right of the final image).
-    expect(wm.leftX).toBeGreaterThan(wm.W * 0.5);
-    expect(wm.topY).toBeGreaterThan(wm.H * 0.5);
+    // The watermark should NOT be at the visual bottom-right of the
+    // final image — that's where post-rotation placement would put
+    // it. For pre-rotation the watermark rotates with the image, so
+    // it ends up wherever the source's bottom-right lands.
+    const inBottomRightQuadrant =
+      wm.leftX > wm.W * 0.5 && wm.topY > wm.H * 0.5;
+    expect(inBottomRightQuadrant).toBe(false);
   });
 });
 

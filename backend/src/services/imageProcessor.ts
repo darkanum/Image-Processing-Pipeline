@@ -172,47 +172,18 @@ export const transformImage = async (
     }
     pipeline = await compositeWatermark(pipeline, spec.watermark, postRot.w, postRot.h);
   } else {
-    // Pre-rotation: watermark → rotate → opacity. The user picks a
-    // position in the FINAL image (e.g. "bottom-right") and the
-    // watermark is composited at the corresponding position in the
-    // pre-rotation image (computed via inverse-rotation mapping) so
-    // that after the rotation, the watermark lands exactly at the
-    // user-specified position of the final image. The rotation then
-    // rotates both the image and the watermark together, so the
-    // watermark text is tilted by the same angle as the image.
+    // Pre-rotation: watermark → rotate → opacity. The watermark is
+    // composited on the pre-rotation image at the user-specified
+    // position (e.g. "bottom-right" of the source image), and then
+    // the rotation rotates both the image and the watermark together
+    // — the watermark rotates with the image, wherever the source's
+    // chosen corner ends up after rotation.
     //
-    // For rotation 0, the post- and pre-rotation coordinate systems
-    // coincide, so this is equivalent to compositing at the
-    // user-specified position of the pre-rotation image.
+    // For rotation 0 this is equivalent to post-rotation placement
+    // (the canvas doesn't change), so the two placements produce
+    // identical results.
     if (spec.watermark) {
-      // Build the overlay at the post-rotation canvas size so the
-      // font/background are rendered at the right size for the final
-      // image (not the pre-rotation image). The actual composition
-      // happens on the pre-rotation image, so we auto-scale to fit
-      // there if needed.
-      let overlay = await buildWatermark(spec.watermark, postRot.w, postRot.h);
-      if (overlay) {
-        overlay = await fitOverlay(overlay, postCropW, postCropH);
-        // Compute the position in the post-rotation canvas, then map
-        // back to the pre-rotation image so that after rotation, the
-        // watermark lands at the user-specified position.
-        const postPos = computeWatermarkPosition(
-          spec.watermark.position,
-          spec.watermark.margin,
-          postRot.w,
-          postRot.h,
-          overlay.width,
-          overlay.height,
-        );
-        const prePos = mapPostToPrePosition(
-          postPos.left,
-          postPos.top,
-          postCropW,
-          postCropH,
-          rot,
-        );
-        pipeline = await compositeOverlayAt(pipeline, overlay, prePos.x, prePos.y);
-      }
+      pipeline = await compositeWatermark(pipeline, spec.watermark, postCropW, postCropH);
     }
     if (rot !== 0) {
       pipeline = pipeline.rotate(rot);
@@ -507,85 +478,6 @@ const computeWatermarkPosition = (
 };
 
 /**
- * Map a point in the post-rotation canvas back to the pre-rotation
- * image coordinate system. The center of the rotated image is the same
- * point as the center of the pre-rotation image, so the inverse
- * transform is:
- *   1. translate by -center_post
- *   2. apply inverse rotation (CW for sharp's CCW positive convention)
- *   3. translate by +center_pre
- *
- * Used by pre-rotation placement so the watermark ends up at the
- * user-specified position of the FINAL image, then rotates with it.
- */
-const mapPostToPrePosition = (
-  postX: number,
-  postY: number,
-  srcW: number,
-  srcH: number,
-  rot: number,
-): { x: number; y: number } => {
-  if (rot === 0) return { x: postX, y: postY };
-  const post = computeRotatedDims(srcW, srcH, rot);
-  const cxPre = srcW / 2;
-  const cyPre = srcH / 2;
-  const cxPost = post.w / 2;
-  const cyPost = post.h / 2;
-  const rad = (rot * Math.PI) / 180;
-  const cos = Math.cos(rad);
-  const sin = Math.sin(rad);
-  // Relative position in the post-rotation canvas
-  const dx = postX - cxPost;
-  const dy = postY - cyPost;
-  // Inverse rotation: forward is CCW by rot (sharp's convention), so
-  // inverse is CW by rot → (x*cos + y*sin, -x*sin + y*cos).
-  const preDx = dx * cos + dy * sin;
-  const preDy = -dx * sin + dy * cos;
-  // Sharp's composite requires integer coordinates; round to the
-  // nearest pixel so floating-point drift from the rotation trig
-  // doesn't reject the call.
-  return {
-    x: Math.round(preDx + cxPre),
-    y: Math.round(preDy + cyPre),
-  };
-};
-
-/**
- * Auto-scale the overlay down if it would overflow the destination.
- * Sharp refuses to composite an overlay that is larger than the
- * destination in either dimension.
- */
-const fitOverlay = async (
-  overlay: WatermarkOverlay,
-  destW: number,
-  destH: number,
-): Promise<WatermarkOverlay> => {
-  if (overlay.width <= destW && overlay.height <= destH) return overlay;
-  const scale = Math.min(destW / overlay.width, destH / overlay.height);
-  const newW = Math.max(1, Math.floor(overlay.width * scale));
-  const newH = Math.max(1, Math.floor(overlay.height * scale));
-  const resized = await sharp(overlay.buffer).resize(newW, newH).toBuffer();
-  return { buffer: resized, width: newW, height: newH };
-};
-
-/**
- * Composite an already-built overlay onto the pipeline at a specific
- * (left, top) position. Returns a fresh pipeline materialized to a
- * buffer (see compositeWatermark for why this matters).
- */
-const compositeOverlayAt = async (
-  pipeline: Sharp,
-  overlay: WatermarkOverlay,
-  left: number,
-  top: number,
-): Promise<Sharp> => {
-  const baked = await pipeline
-    .composite([{ input: overlay.buffer, left, top }])
-    .toBuffer();
-  return sharp(baked, { failOn: "error" });
-};
-
-/**
  * Render a watermark overlay and composite it onto the given sharp
  * pipeline at the user-specified position. Auto-scales the overlay
  * down if it would otherwise overflow the destination. Returns the
@@ -607,7 +499,18 @@ const compositeWatermark = async (
 ): Promise<Sharp> => {
   let overlay = await buildWatermark(watermark, destW, destH);
   if (!overlay) return pipeline;
-  overlay = await fitOverlay(overlay, destW, destH);
+  // Sharp refuses to composite an overlay that is larger than the
+  // destination in either dimension. If the user's font size / text
+  // length / margin makes the overlay bigger than the image, scale it
+  // down to fit. This keeps the watermark visible on small images
+  // instead of failing the whole job.
+  if (overlay.width > destW || overlay.height > destH) {
+    const scale = Math.min(destW / overlay.width, destH / overlay.height);
+    const newW = Math.max(1, Math.floor(overlay.width * scale));
+    const newH = Math.max(1, Math.floor(overlay.height * scale));
+    const resized = await sharp(overlay.buffer).resize(newW, newH).toBuffer();
+    overlay = { buffer: resized, width: newW, height: newH };
+  }
   const { left, top } = computeWatermarkPosition(
     watermark.position,
     watermark.margin,
@@ -616,7 +519,13 @@ const compositeWatermark = async (
     overlay.width,
     overlay.height,
   );
-  return compositeOverlayAt(pipeline, overlay, left, top);
+  // IMPORTANT: bake the composite to a buffer before returning, so
+  // that subsequent rotate/flip/etc. on the returned pipeline don't
+  // drop the overlay (sharp's chained-geometry-op bug).
+  const baked = await pipeline
+    .composite([{ input: overlay.buffer, left, top }])
+    .toBuffer();
+  return sharp(baked, { failOn: "error" });
 };
 
 /**
