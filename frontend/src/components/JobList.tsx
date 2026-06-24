@@ -10,131 +10,172 @@ interface JobListProps {
   onJobCreated?: (job: { id: string }) => void;
 }
 
-type TabKey = "queue" | "executing" | "completed" | "failed";
+type InProgressKey = "queue" | "executing";
+type ArchiveKey = "completed" | "failed";
 
-interface TabDef {
-  key: TabKey;
-  label: string;
-  match: (s: JobStatus) => boolean;
-}
-
-const TABS: TabDef[] = [
+/** Jobs that should always be visible (top half). */
+const IN_PROGRESS: { key: InProgressKey; label: string; match: (s: JobStatus) => boolean }[] = [
   { key: "queue", label: "Queue", match: (s) => s === "pending" },
   {
     key: "executing",
     label: "Executing",
     match: (s) => s === "downloading" || s === "processing" || s === "uploading",
   },
+];
+
+/** Jobs that live behind a toggle (bottom half). */
+const ARCHIVE: { key: ArchiveKey; label: string; match: (s: JobStatus) => boolean }[] = [
   { key: "completed", label: "Completed", match: (s) => s === "completed" },
   { key: "failed", label: "Failed", match: (s) => s === "failed" },
 ];
-
-const EMPTY_HINTS: Record<TabKey, string> = {
-  queue: "Submit a URL above to enqueue your first job.",
-  executing: "Nothing is running right now — your jobs will appear here as they start.",
-  completed: "Completed jobs will appear here with the result URL.",
-  failed: "Failed jobs will appear here with their error message and a retry button.",
-};
 
 const MAX_JOBS = 50;
 
 export const JobList = ({ refreshSignal: _refreshSignal, onJobCreated }: JobListProps): JSX.Element => {
   void _refreshSignal; // accepted for API stability
   const { jobs, loading, error, refresh } = useJobsLite(MAX_JOBS);
-  const [tab, setTab] = useState<TabKey>("queue");
+  // Which archive tab is selected. Default to "completed" (more common).
+  const [archiveTab, setArchiveTab] = useState<ArchiveKey>("completed");
 
-  // Auto-jump to the most interesting tab only ONCE, on the very first
-  // snapshot. We track this with a ref so the effect doesn't re-fire on
-  // every Firestore update. Important: this MUST NOT run on user clicks
-  // — once the user has picked a tab, stay there.
-  const autoSwitchedRef = useRef(false);
-  useEffect(() => {
-    if (autoSwitchedRef.current) return;
-    if (loading) return;
-    if (jobs.length === 0) return;
-    autoSwitchedRef.current = true;
-    // If the default "queue" tab is empty, jump to a tab that has content.
-    const counts = {
-      queue: 0,
-      executing: 0,
-      completed: 0,
-      failed: 0,
-    };
-    for (const j of jobs) {
-      const t = TABS.find((tDef) => tDef.match(j.status));
-      if (t) counts[t.key] += 1;
-    }
-    if (counts.queue > 0) return;
-    if (counts.executing > 0) setTab("executing");
-    else if (counts.completed > 0) setTab("completed");
-    else if (counts.failed > 0) setTab("failed");
-  }, [jobs, loading]);
-
+  // Group jobs by their bucket.
   const grouped = useMemo(() => {
-    const buckets: Record<TabKey, JobRecord[]> = {
-      queue: [],
-      executing: [],
-      completed: [],
-      failed: [],
-    };
+    const inProgress: Record<InProgressKey, JobRecord[]> = { queue: [], executing: [] };
+    const archive: Record<ArchiveKey, JobRecord[]> = { completed: [], failed: [] };
     for (const job of jobs) {
-      const t = TABS.find((tabDef) => tabDef.match(job.status));
-      if (t) buckets[t.key].push(job);
+      const ip = IN_PROGRESS.find((t) => t.match(job.status));
+      if (ip) inProgress[ip.key].push(job);
+      const a = ARCHIVE.find((t) => t.match(job.status));
+      if (a) archive[a.key].push(job);
     }
-    return buckets;
+    return { inProgress, archive };
   }, [jobs]);
 
-  const tabsWithCounts = TABS.map((t) => ({ ...t, count: grouped[t.key].length }));
-  const visible = grouped[tab];
-  const activeTab = tabsWithCounts.find((t) => t.key === tab)!;
+  const counts = {
+    queue: grouped.inProgress.queue.length,
+    executing: grouped.inProgress.executing.length,
+    completed: grouped.archive.completed.length,
+    failed: grouped.archive.failed.length,
+  };
+
+  // Tiny "live" pulse on the executing column when its count grows —
+  // gives a visual cue that work is happening. Fires once per increase.
+  const prevExecCountRef = useRef(counts.executing);
+  const [pulse, setPulse] = useState(false);
+  useEffect(() => {
+    if (counts.executing > prevExecCountRef.current) {
+      setPulse(true);
+      const t = setTimeout(() => setPulse(false), 600);
+      prevExecCountRef.current = counts.executing;
+      return () => clearTimeout(t);
+    }
+    prevExecCountRef.current = counts.executing;
+  }, [counts.executing]);
 
   return (
     <div className="job-list">
-      <div className="job-tabs" role="tablist">
-        {tabsWithCounts.map((t) => (
-          <button
-            type="button"
-            key={t.key}
-            role="tab"
-            aria-selected={tab === t.key}
-            className={`job-tab ${tab === t.key ? "active" : ""} ${t.count > 0 ? "has-jobs" : ""}`}
-            onClick={() => setTab(t.key)}
-          >
-            <span>{t.label}</span>
-            {t.count > 0 && <span className="tab-count">{t.count}</span>}
-          </button>
+      {/* ── Top half: always-visible in-progress columns ────────── */}
+      <div className="in-progress-grid">
+        {IN_PROGRESS.map((col) => (
+          <InProgressColumn
+            key={col.key}
+            label={col.label}
+            jobs={grouped.inProgress[col.key]}
+            loading={loading}
+            pulse={col.key === "executing" && pulse}
+          />
         ))}
       </div>
 
-      {loading && jobs.length === 0 ? (
-        <div className="empty">Connecting to Firestore…</div>
-      ) : error ? (
-        <div className="empty error">
-          <p>Failed to subscribe: {error}</p>
-          <button type="button" className="retry-button" onClick={refresh}>
-            ↻ Retry connection
-          </button>
-        </div>
-      ) : visible.length === 0 ? (
-        <div className="empty">
-          <p>No {activeTab.label.toLowerCase()} jobs.</p>
-          <p className="empty-hint">{EMPTY_HINTS[tab]}</p>
-        </div>
-      ) : (
-        <div className="job-cards">
-          {visible.map((job) => (
-            <JobCard
-              key={job.id}
-              job={job}
-              onRetry={
-                job.status === "failed" && onJobCreated
-                  ? onJobCreated
-                  : undefined
-              }
-            />
+      {/* ── Bottom half: archive with a 2-way toggle ──────────── */}
+      <div className="archive-section">
+        <div className="archive-tabs" role="tablist">
+          {ARCHIVE.map((t) => (
+            <button
+              type="button"
+              key={t.key}
+              role="tab"
+              aria-selected={archiveTab === t.key}
+              className={`archive-tab ${archiveTab === t.key ? "active" : ""} ${grouped.archive[t.key].length > 0 ? "has-jobs" : ""}`}
+              onClick={() => setArchiveTab(t.key)}
+            >
+              <span>{t.label}</span>
+              {grouped.archive[t.key].length > 0 && (
+                <span className="tab-count">{grouped.archive[t.key].length}</span>
+              )}
+            </button>
           ))}
         </div>
-      )}
+
+        {error ? (
+          <div className="empty error">
+            <p>Failed to subscribe: {error}</p>
+            <button type="button" className="retry-button" onClick={refresh}>
+              ↻ Retry connection
+            </button>
+          </div>
+        ) : grouped.archive[archiveTab].length === 0 ? (
+          <div className="empty">
+            <p>No {archiveTab} jobs yet.</p>
+            <p className="empty-hint">
+              {archiveTab === "completed"
+                ? "Completed jobs will appear here with the result URL."
+                : "Failed jobs will appear here with their error message and a retry button."}
+            </p>
+          </div>
+        ) : (
+          <div className="job-cards">
+            {grouped.archive[archiveTab].map((job) => (
+              <JobCard
+                key={job.id}
+                job={job}
+                onRetry={
+                  job.status === "failed" && onJobCreated
+                    ? onJobCreated
+                    : undefined
+                }
+              />
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+interface InProgressColumnProps {
+  label: string;
+  jobs: JobRecord[];
+  loading: boolean;
+  /** Trigger a brief pulse animation on the count badge. */
+  pulse: boolean;
+}
+
+const InProgressColumn = ({ label, jobs, loading, pulse }: InProgressColumnProps): JSX.Element => {
+  return (
+    <div className="in-progress-col">
+      <div className="in-progress-head">
+        <span className="in-progress-title">{label}</span>
+        <span className={`in-progress-count ${pulse ? "pulse" : ""} ${jobs.length > 0 ? "has-jobs" : ""}`}>
+          {jobs.length}
+        </span>
+      </div>
+      <div className="in-progress-body">
+        {jobs.length === 0 ? (
+          loading ? (
+            <div className="empty small">Loading…</div>
+          ) : (
+            <div className="empty small">
+              {label === "Queue"
+                ? "Submit a URL above to enqueue your first job."
+                : "Nothing is running right now."}
+            </div>
+          )
+        ) : (
+          jobs.map((job) => (
+            <JobCard key={job.id} job={job} compact />
+          ))
+        )}
+      </div>
     </div>
   );
 };

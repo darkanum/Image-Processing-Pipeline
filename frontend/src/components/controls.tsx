@@ -92,6 +92,19 @@ export const Section = ({
 );
 
 /** Range slider with current value readout. */
+/**
+ * Update the inline `--range-fill` CSS variable on a range input so the
+ * filled portion of the track is colored. Called from `onInput` (every
+ * change, not just committed changes) so the fill animates with the thumb.
+ */
+const setRangeFill = (el: HTMLInputElement): void => {
+  const min = Number(el.min) || 0;
+  const max = Number(el.max) || 100;
+  const val = Number(el.value);
+  const pct = max === min ? 50 : ((val - min) / (max - min)) * 100;
+  el.style.setProperty("--range-fill", `${Math.max(0, Math.min(100, pct))}%`);
+};
+
 export const Slider = ({
   label,
   value,
@@ -108,18 +121,26 @@ export const Slider = ({
   max: number;
   step?: number;
   unit?: string;
-}): JSX.Element => (
-  <label className="slider">
-    <span className="slider-label">
-      {label} <span className="slider-value">{value}{unit}</span>
-    </span>
-    <input
-      type="range"
-      min={min}
-      max={max}
-      step={step ?? 1}
-      value={value}
-      onChange={(e) => onChange(Number(e.target.value))}
-    />
-  </label>
-);
+}): JSX.Element => {
+  const pct = max === min ? 50 : ((value - min) / (max - min)) * 100;
+  return (
+    <label className="slider">
+      <span className="slider-label">
+        {label} <span className="slider-value">{value}{unit}</span>
+      </span>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step ?? 1}
+        value={value}
+        style={{ ["--range-fill" as string]: `${Math.max(0, Math.min(100, pct))}%` }}
+        onInput={(e) => setRangeFill(e.currentTarget)}
+        onChange={(e) => {
+          setRangeFill(e.currentTarget);
+          onChange(Number(e.target.value));
+        }}
+      />
+    </label>
+  );
+};

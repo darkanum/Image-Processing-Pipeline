@@ -49,7 +49,7 @@ const seedJobs = (statuses: string[]): void => {
   });
 };
 
-describe("JobList — tab behavior", () => {
+describe("JobList — layout", () => {
   beforeEach(() => {
     mockOnSnapshot.mockReset();
     mockOnSnapshot.mockImplementation((_q, onNext) => {
@@ -60,33 +60,50 @@ describe("JobList — tab behavior", () => {
   });
   afterEach(() => vi.restoreAllMocks());
 
-  it("renders all 4 tabs", async () => {
+  it("renders the always-visible Queue and Executing columns", () => {
     render(<JobList refreshSignal={0} />);
-    expect(screen.getByRole("tab", { name: /queue/i })).toBeTruthy();
-    expect(screen.getByRole("tab", { name: /executing/i })).toBeTruthy();
+    expect(screen.getByText("Queue")).toBeTruthy();
+    expect(screen.getByText("Executing")).toBeTruthy();
+  });
+
+  it("renders the Completed and Failed archive tabs", () => {
+    render(<JobList refreshSignal={0} />);
     expect(screen.getByRole("tab", { name: /completed/i })).toBeTruthy();
     expect(screen.getByRole("tab", { name: /failed/i })).toBeTruthy();
   });
 
-  it("stays on the tab the user clicks, even if it is empty", async () => {
+  it("shows the Queue count when there are pending jobs", async () => {
     render(<JobList refreshSignal={0} />);
-    // Seed with one completed job (so queue is empty).
-    act(() => seedJobs(["completed"]));
-    // User explicitly clicks Failed — should stay on Failed even though it's empty.
-    const failedTab = screen.getByRole("tab", { name: /failed/i });
-    fireEvent.click(failedTab);
-    await waitFor(() => expect(failedTab.getAttribute("aria-selected")).toBe("true"));
-    // After a re-snapshot (simulate worker progress), the tab should NOT
-    // have been forced back to the auto-default.
-    act(() => seedJobs(["completed", "completed"]));
-    expect(failedTab.getAttribute("aria-selected")).toBe("true");
+    act(() => seedJobs(["pending", "pending"]));
+    await waitFor(() => {
+      const counts = document.querySelectorAll(".in-progress-count");
+      expect(counts[0]?.textContent).toBe("2"); // Queue
+    });
   });
 
-  it("auto-jumps from empty queue to the first non-empty tab on initial load", async () => {
+  it("shows the Executing count when there are in-flight jobs", async () => {
     render(<JobList refreshSignal={0} />);
-    act(() => seedJobs(["completed", "completed"]));
+    act(() => seedJobs(["processing", "downloading", "uploading"]));
+    await waitFor(() => {
+      const counts = document.querySelectorAll(".in-progress-count");
+      expect(counts[1]?.textContent).toBe("3"); // Executing
+    });
+  });
+
+  it("Completed tab is the default archive view", () => {
+    render(<JobList refreshSignal={0} />);
+    expect(
+      screen.getByRole("tab", { name: /completed/i }).getAttribute("aria-selected"),
+    ).toBe("true");
+  });
+
+  it("clicking Failed tab switches the archive view", async () => {
+    render(<JobList refreshSignal={0} />);
+    fireEvent.click(screen.getByRole("tab", { name: /failed/i }));
     await waitFor(() =>
-      expect(screen.getByRole("tab", { name: /completed/i }).getAttribute("aria-selected")).toBe("true"),
+      expect(
+        screen.getByRole("tab", { name: /failed/i }).getAttribute("aria-selected"),
+      ).toBe("true"),
     );
   });
 });

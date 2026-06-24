@@ -143,4 +143,57 @@ describe("JobForm", () => {
     // The percentage label updates
     expect(screen.getByText("42%")).toBeTruthy();
   });
+
+  it("watermark text color picker is shown when watermark is enabled and kind=text", () => {
+    render(<JobForm apiUrl="" onCreated={undefined} />);
+    fireEvent.click(screen.getByRole("checkbox", { name: /^watermark$/i }));
+    // Kind defaults to "text", so the color picker should be present.
+    expect(screen.getByLabelText("Watermark text color")).toBeTruthy();
+    expect(screen.getByLabelText("Watermark text color hex")).toBeTruthy();
+  });
+
+  it("custom rotation input accepts any angle", () => {
+    render(<JobForm apiUrl="" onCreated={undefined} />);
+    const customInput = screen.getByLabelText(/custom rotation angle/i) as HTMLInputElement;
+    fireEvent.change(customInput, { target: { value: "37" } });
+    expect((screen.getByLabelText(/custom rotation angle/i) as HTMLInputElement).value).toBe("37");
+  });
+
+  it("custom rotation input clamps to [-180, 180]", () => {
+    render(<JobForm apiUrl="" onCreated={undefined} />);
+    const customInput = screen.getByLabelText(/custom rotation angle/i) as HTMLInputElement;
+    fireEvent.change(customInput, { target: { value: "999" } });
+    // 999 should be clamped to 180
+    expect((screen.getByLabelText(/custom rotation angle/i) as HTMLInputElement).value).toBe("180");
+  });
+
+  it("color filter chips toggle B&W and Invert", () => {
+    render(<JobForm apiUrl="" onCreated={undefined} />);
+    const bwChip = screen.getByRole("checkbox", { name: /B&/i }) as HTMLInputElement;
+    const invertChip = screen.getByRole("checkbox", { name: /invert/i }) as HTMLInputElement;
+    expect(bwChip).toBeTruthy();
+    expect(invertChip).toBeTruthy();
+    expect(bwChip.checked).toBe(false);
+    fireEvent.click(bwChip);
+    expect(bwChip.checked).toBe(true);
+  });
+
+  it("image opacity slider is hidden when output format is jpeg", () => {
+    render(<JobForm apiUrl="" onCreated={undefined} />);
+    // Default is "original" so the slider is visible.
+    expect(screen.getByLabelText(/image opacity/i)).toBeTruthy();
+    // Switch to JPEG — slider should disappear.
+    const formatSelect = screen.getByLabelText(/^format$/i) as HTMLSelectElement;
+    fireEvent.change(formatSelect, { target: { value: "jpeg" } });
+    expect(screen.queryByLabelText(/image opacity/i)).toBeNull();
+  });
+
+  it("image opacity slider returns when output format is png", () => {
+    render(<JobForm apiUrl="" onCreated={undefined} />);
+    const formatSelect = screen.getByLabelText(/^format$/i) as HTMLSelectElement;
+    fireEvent.change(formatSelect, { target: { value: "jpeg" } });
+    expect(screen.queryByLabelText(/image opacity/i)).toBeNull();
+    fireEvent.change(formatSelect, { target: { value: "png" } });
+    expect(screen.getByLabelText(/image opacity/i)).toBeTruthy();
+  });
 });

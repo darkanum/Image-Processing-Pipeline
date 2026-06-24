@@ -587,6 +587,102 @@ select.form-input {
   padding-top: 14px;
   border-top: 1px solid var(--border);
 }
+
+/* Custom rotation input + slider for the Adjust block */
+.rotate-custom {
+  display: grid;
+  grid-template-columns: auto 70px auto 1fr;
+  gap: 8px;
+  align-items: center;
+  margin-top: 8px;
+}
+.rotate-custom-label {
+  font-size: 12px;
+  color: var(--text-soft);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.rotate-custom-input {
+  text-align: center;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-weight: 500;
+  padding: 6px 8px;
+}
+.rotate-custom-suffix {
+  font-size: 12px;
+  color: var(--text-mute);
+  font-weight: 500;
+}
+.rotate-slider {
+  margin: 0;
+}
+
+/* Color filter chips (B&W / Invert / Sepia) */
+.color-filters {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.color-filters-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.color-filters-head .form-block-title {
+  font-size: 12px;
+  color: var(--text-soft);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+}
+.color-filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: var(--surface);
+  border: 1.5px solid var(--border-strong);
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-soft);
+  transition: all 0.15s;
+  user-select: none;
+}
+.filter-chip:hover {
+  border-color: var(--primary);
+  color: var(--text);
+}
+.filter-chip input {
+  display: none;
+}
+.filter-chip.active {
+  background: var(--primary-soft);
+  border-color: var(--primary);
+  color: var(--primary-text-on-soft);
+  font-weight: 500;
+}
+.filter-chip-hint {
+  font-size: 11px;
+  color: var(--text-mute);
+  font-weight: 400;
+}
+.filter-chip.active .filter-chip-hint {
+  color: var(--primary);
+}
+.color-filter-sliders {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
 .adjust-opacity .form-label {
   display: flex;
   justify-content: space-between;
@@ -722,7 +818,149 @@ button.primary:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* ── Job list / tabs / cards ───────────────────────────────────── */
 
-.job-list { display: flex; flex-direction: column; gap: 14px; }
+.job-list { display: flex; flex-direction: column; gap: 16px; }
+
+/* Top half: in-progress columns side-by-side. Below 640px they stack. */
+.in-progress-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+.in-progress-col {
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  min-height: 80px;
+}
+.in-progress-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.in-progress-title {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.in-progress-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 7px;
+  background: var(--surface-3);
+  color: var(--text-soft);
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  transition: background 0.2s, color 0.2s, transform 0.2s;
+}
+.in-progress-count.has-jobs {
+  background: var(--primary);
+  color: white;
+}
+.in-progress-count.pulse {
+  animation: count-pulse 0.6s ease-out;
+}
+@keyframes count-pulse {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.35); }
+  100% { transform: scale(1); }
+}
+.in-progress-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  max-height: 360px;
+  overflow-y: auto;
+}
+.in-progress-body .empty {
+  padding: 16px;
+  text-align: center;
+}
+
+/* Archive section: smaller tabs (just 2, not 4) and the same card layout. */
+.archive-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.archive-tabs {
+  display: flex;
+  gap: 2px;
+  border-bottom: 1px solid var(--border);
+}
+.archive-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-soft);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.archive-tab:hover { color: var(--text); }
+.archive-tab.active {
+  color: var(--primary);
+  border-bottom-color: var(--primary);
+}
+.archive-tab .tab-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 18px;
+  padding: 0 6px;
+  background: var(--surface-3);
+  color: var(--text-soft);
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.archive-tab.active .tab-count {
+  background: var(--primary-soft);
+  color: var(--primary);
+}
+.archive-tab.has-jobs .tab-count { background: var(--primary); color: white; }
+.archive-tab.has-jobs.active .tab-count { background: var(--primary); color: white; }
+
+/* Compact job card (used inside in-progress columns) */
+.job-card.compact {
+  padding: 10px 12px;
+  border-left-width: 3px;
+}
+.job-card.compact .job-card-head {
+  margin-bottom: 4px;
+}
+.job-card.compact .job-url {
+  font-size: 11px;
+  margin-bottom: 6px;
+  word-break: break-all;
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.job-card.compact .progress {
+  margin: 4px 0;
+}
 .job-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); }
 .job-tab {
   display: inline-flex;
@@ -1026,10 +1264,74 @@ button.primary:disabled { opacity: 0.5; cursor: not-allowed; }
   font-weight: 500;
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
 }
-.slider input[type="range"] {
+
+/* ── Slider restyle: bigger thumb, clear filled track, value bubble ──
+   The default <input type="range"> thumb is tiny (~14px) and easy to miss.
+   We override the thumb to 22px and add a clear filled-track on the left
+   of the thumb via background-size + accent-color. Browsers handle the
+   specifics via ::-webkit-slider-runnable-track / ::-moz-range-track. */
+.slider input[type="range"],
+input[type="range"].form-input.slider {
+  -webkit-appearance: none;
+  appearance: none;
   width: 100%;
-  accent-color: var(--primary);
+  height: 8px;
+  border-radius: 4px;
+  background: linear-gradient(
+    to right,
+    var(--primary) 0%,
+    var(--primary) var(--range-fill, 50%),
+    var(--surface-3) var(--range-fill, 50%),
+    var(--surface-3) 100%
+  );
+  outline: none;
+  padding: 0;
+  border: none;
+  margin: 8px 0;
   cursor: pointer;
+  accent-color: var(--primary);
+}
+.slider input[type="range"]:focus-visible,
+input[type="range"].form-input.slider:focus-visible {
+  box-shadow: var(--focus-ring);
+}
+.slider input[type="range"]::-webkit-slider-thumb,
+input[type="range"].form-input.slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--surface);
+  border: 3px solid var(--primary);
+  cursor: grab;
+  box-shadow: var(--shadow-sm);
+  transition: transform 0.1s, box-shadow 0.1s;
+}
+.slider input[type="range"]::-webkit-slider-thumb:hover,
+input[type="range"].form-input.slider::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+  box-shadow: var(--shadow);
+}
+.slider input[type="range"]::-webkit-slider-thumb:active,
+input[type="range"].form-input.slider::-webkit-slider-thumb:active {
+  cursor: grabbing;
+  transform: scale(1.1);
+}
+.slider input[type="range"]::-moz-range-thumb,
+input[type="range"].form-input.slider::-moz-range-thumb {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--surface);
+  border: 3px solid var(--primary);
+  cursor: grab;
+  box-shadow: var(--shadow-sm);
+}
+.slider input[type="range"]::-moz-range-track,
+input[type="range"].form-input.slider::-moz-range-track {
+  background: transparent;
+  height: 8px;
 }
 
 /* ── Form select (legacy) ──────────────────────────────────────── */
@@ -1161,4 +1463,5 @@ button.primary:disabled { opacity: 0.5; cursor: not-allowed; }
   .container { padding: 18px 12px 40px; }
   .card { padding: 18px 18px; }
   .theme-toggle-label { display: none; }
+  .in-progress-grid { grid-template-columns: 1fr; }
 }

@@ -17,7 +17,7 @@ export type JobStep =
   | "uploading"
   | "completed";
 
-export type OutputFormat = "png" | "jpeg" | "webp";
+export type OutputFormat = "png" | "jpeg" | "webp" | "avif";
 
 /** 9-zone grid position for watermarks / cropping focal point. */
 export type WatermarkPosition =
@@ -29,7 +29,8 @@ export type WatermarkKind = "text" | "image";
 
 export type ResizeMode = "fit" | "crop" | "pad" | "none";
 
-export type Rotation = 0 | 90 | 180 | 270;
+/** Rotation in degrees, can be any integer (or float) within a sane range. */
+export type Rotation = number;
 
 export interface ResizeSpec {
   mode: ResizeMode;
@@ -71,6 +72,13 @@ export interface WatermarkSpec {
   /** Text size in px, or image render width in px (height keeps aspect). */
   size: number;
   /**
+   * Text fill color (hex like "#ffffff"). Only used for kind=text. The
+   * outline is kept as a dark version of this color (or black if the
+   * text is light) so the watermark stays legible on any background.
+   * Defaults to white.
+   */
+  color?: string;
+  /**
    * Optional backing rectangle behind the watermark for legibility.
    * `enabled=false` (or omitting the field) renders the watermark with
    * no backing — fully transparent so the source image shows through.
@@ -86,12 +94,32 @@ export interface WatermarkSpec {
   };
 }
 
+/**
+ * Color adjustment filters applied after resize and before watermark.
+ * All values default to "off" / identity. Multiple can be combined.
+ */
+export interface ColorAdjustSpec {
+  /** Convert to grayscale. */
+  grayscale: boolean;
+  /** Brightness multiplier 0-200. 100 = no change. Defaults to 100. */
+  brightness: number;
+  /** Saturation multiplier 0-200. 100 = no change. Defaults to 100. */
+  saturation: number;
+  /** Apply a sepia tone (0-100, 0 = no effect). Defaults to 0. */
+  sepia: number;
+  /** Invert all colors. Defaults to false. */
+  invert: boolean;
+}
+
 export interface TransformSpec {
   outputFormat: OutputFormat | "original";
   quality: number;
   resize: ResizeSpec | null;
   crop: CropSpec | null;
+  /** @deprecated use `colorAdjust.grayscale` instead. Kept for back-compat. */
   grayscale: boolean;
+  /** New color adjustment spec (brightness, saturation, sepia, invert, grayscale). */
+  colorAdjust?: ColorAdjustSpec;
   watermark: WatermarkSpec | null;
   rotation: Rotation;
   flipHorizontal: boolean;
@@ -175,6 +203,7 @@ export const DEFAULT_TRANSFORM: TransformSpec = {
   resize: null,
   crop: null,
   grayscale: false,
+  colorAdjust: { grayscale: false, brightness: 100, saturation: 100, sepia: 0, invert: false },
   watermark: null,
   rotation: 0,
   flipHorizontal: false,

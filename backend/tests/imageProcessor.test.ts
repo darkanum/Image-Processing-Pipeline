@@ -64,6 +64,8 @@ describe("transformImage — basic happy path", () => {
     const result = await transformImage(input, {
       ...DEFAULT_TRANSFORM,
       grayscale: true,
+      // Clear colorAdjust so the legacy top-level grayscale is honored.
+      colorAdjust: undefined,
       resize: { mode: "fit", width: 300, lockAspectRatio: true },
     });
     const { data, info } = await sharp(result.buffer)
@@ -643,5 +645,155 @@ describe("TransformSpec helpers", () => {
     expect(t.opacity).toBe(100);
     expect(t.resize).toBeNull();
     expect(t.watermark).toBeNull();
+  });
+});
+
+describe("transformImage — custom rotation", () => {
+  it("accepts arbitrary rotation angles (45, 30, 7)", async () => {
+    for (const angle of [45, 30, 7, -15, 360]) {
+      const input = await buildTestImage(200, 100);
+      const result = await transformImage(input, {
+        ...DEFAULT_TRANSFORM,
+        rotation: angle,
+        resize: null,
+      });
+      // After rotation, dimensions swap or grow to fit the rotated bbox.
+      expect(result.bytes).toBeGreaterThan(0);
+      expect(result.width).toBeGreaterThan(0);
+      expect(result.height).toBeGreaterThan(0);
+    }
+  });
+
+  it("wraps out-of-range rotations into [-180, 180]", async () => {
+    const input = await buildTestImage(200, 100);
+    // 720 should wrap to 0 — same as no rotation
+    const noRot = await transformImage(input, { ...DEFAULT_TRANSFORM, rotation: 0, resize: null });
+    const wrapped = await transformImage(input, { ...DEFAULT_TRANSFORM, rotation: 720, resize: null });
+    expect(wrapped.width).toBe(noRot.width);
+    expect(wrapped.height).toBe(noRot.height);
+  });
+
+  it("non-numeric rotation falls back to 0", async () => {
+    const input = await buildTestImage(200, 100);
+    // Cast through unknown so TS doesn't complain; runtime should clamp to 0.
+    const result = await transformImage(input, {
+      ...DEFAULT_TRANSFORM,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      rotation: "not a number" as any,
+      resize: null,
+    });
+    const noRot = await transformImage(input, { ...DEFAULT_TRANSFORM, rotation: 0, resize: null });
+    expect(result.width).toBe(noRot.width);
+    expect(result.height).toBe(noRot.height);
+  });
+});
+
+describe("transformImage — color adjustments", () => {
+  it("brightness 50 darkens the image", async () => {
+    const input = await buildTestImage(50, 50, { r: 200, g: 100, b: 50 });
+    const result = await transformImage(input, {
+      ...DEFAULT_TRANSFORM,
+      colorAdjust: { grayscale: false, brightness: 50, saturation: 100, sepia: 0, invert: false },
+      resize: null,
+    });
+    const { data, info } = await sharp(result.buffer).raw().toBuffer({ resolveWithObject: true });
+    let sum = 0, count = 0;
+    for (let i = 0; i < data.length; i += info.channels) { sum += data[i] + data[i + 1] + data[i + 2]; count += 3; }
+    const avg = sum / count;
+    // 50% brightness on a 200,100,50 image should produce an average well below 200
+    expect(avg).toBeLessThan(200);
+  });
+
+  it("saturation 0 produces a grayscale image", async () => {
+    const input = await buildTestImage(50, 50, { r: 200, g: 50, b: 50 });
+    const result = await transformImage(input, {
+      ...DEFAULT_TRANSFORM,
+      colorAdjust: { grayscale: false, brightness: 100, saturation: 0, sepia: 0, invert: false },
+      resize: null,
+    });
+    const { data, info } = await sharp(result.buffer).raw().toBuffer({ resolveWithObject: true });
+    // R == G == B for a fully-desaturated pixel
+    const r = data[0], g = data[1], b = data[2];
+    expect(Math.abs(r - g)).toBeLessThanOrEqual(2);
+    expect(Math.abs(g - b)).toBeLessThanOrEqual(2);
+  });
+
+  it("invert flips colors (white <-> black)", async () => {
+    const input = await buildTestImage(20, 20, { r: 0, g: 0, b: 0 });
+    const result = await transformImage(input, {
+      ...DEFAULT_TRANSFORM,
+      colorAdjust: { grayscale: false, brightness: 100, saturation: 100, sepia: 0, invert: true },
+      resize: null,
+    });
+    const { data } = await sharp(result.buffer).raw().toBuffer({ resolveWithObject: true });
+    expect(data[0]).toBeGreaterThan(250);
+    expect(data[1]).toBeGreaterThan(250);
+    expect(data[2]).toBeGreaterThan(250);
+  });
+
+  it("colorAdjust.grayscale produces a grayscale image", async () => {
+    const input = await buildTestImage(50, 50, { r: 200, g: 50, b: 50 });
+    const result = await transformImage(input, {
+      ...DEFAULT_TRANSFORM,
+      colorAdjust: { grayscale: true, brightness: 100, saturation: 100, sepia: 0, invert: false },
+      resize: null,
+    });
+    const { data } = await sharp(result.buffer).raw().toBuffer({ resolveWithObject: true });
+    expect(Math.abs(data[0] - data[1])).toBeLessThanOrEqual(2);
+    expect(Math.abs(data[1] - data[2])).toBeLessThanOrEqual(2);
+  });
+
+  it("legacy top-level grayscale still works (back-compat)", async () => {
+    const input = await buildTestImage(50, 50, { r: 200, g: 50, b: 50 });
+    const result = await transformImage(input, {
+      ...DEFAULT_TRANSFORM,
+      grayscale: true,
+      // No colorAdjust — old clients that don't know about the new field
+      // should still get their top-level grayscale applied.
+      colorAdjust: undefined,
+      resize: null,
+    });
+    const { data } = await sharp(result.buffer).raw().toBuffer({ resolveWithObject: true });
+    expect(Math.abs(data[0] - data[1])).toBeLessThanOrEqual(2);
+  });
+});
+
+describe("transformImage — watermark text color", () => {
+  it("uses the spec.color field for the text fill", async () => {
+    const input = await buildTestImage(800, 600);
+    // Red text on the image. We can't directly inspect the text color of the
+    // watermark in the composite, but we can verify the call succeeds and
+    // produces a different result than the default white text.
+    const red = await transformImage(input, {
+      ...DEFAULT_TRANSFORM,
+      watermark: {
+        kind: "text", text: "RED", position: "bottom-right", margin: 20,
+        opacity: 100, size: 64, color: "#ff0000",
+      },
+      resize: null,
+    });
+    const white = await transformImage(input, {
+      ...DEFAULT_TRANSFORM,
+      watermark: {
+        kind: "text", text: "RED", position: "bottom-right", margin: 20,
+        opacity: 100, size: 64, color: "#ffffff",
+      },
+      resize: null,
+    });
+    // The bytes will differ because the text color is different.
+    expect(red.bytes).not.toBe(white.bytes);
+  });
+
+  it("falls back to white when no color is specified", async () => {
+    const input = await buildTestImage(400, 300);
+    const result = await transformImage(input, {
+      ...DEFAULT_TRANSFORM,
+      watermark: {
+        kind: "text", text: "DEFAULT", position: "bottom-right", margin: 20,
+        opacity: 100, size: 32, // no color
+      },
+      resize: null,
+    });
+    expect(result.bytes).toBeGreaterThan(0);
   });
 });

@@ -7,6 +7,9 @@ import { apiRequest, ApiError } from "../lib/api";
 interface JobCardProps {
   job: JobRecord;
   onRetry?: (newJob: { id: string }) => void;
+  /** Compact mode: smaller padding, hidden description, used inside the
+   *  in-progress columns. Defaults to false. */
+  compact?: boolean;
 }
 
 const formatBytes = (bytes?: number): string => {
@@ -62,7 +65,7 @@ const describeTransform = (t: TransformSpec | null): string[] => {
   return out;
 };
 
-export const JobCard = ({ job, onRetry }: JobCardProps): JSX.Element => {
+export const JobCard = ({ job, onRetry, compact = false }: JobCardProps): JSX.Element => {
   const isCompleted = job.status === "completed";
   const isFailed = job.status === "failed";
   const [imgError, setImgError] = useState<boolean>(false);
@@ -101,7 +104,7 @@ export const JobCard = ({ job, onRetry }: JobCardProps): JSX.Element => {
 
   return (
     <article
-      className={`job-card ${isCompleted ? "done" : ""} ${isFailed ? "failed" : ""}`}
+      className={`job-card ${isCompleted ? "done" : ""} ${isFailed ? "failed" : ""} ${compact ? "compact" : ""}`}
       style={stateStyle}
       aria-busy={job.status !== "completed" && job.status !== "failed"}
     >
@@ -118,7 +121,7 @@ export const JobCard = ({ job, onRetry }: JobCardProps): JSX.Element => {
 
       <ProgressBar status={job.status} progress={job.progress} />
 
-      {description.length > 0 && (
+      {description.length > 0 && !compact && (
         <div className="job-description">
           <span className="job-description-label">Applied:</span>
           <ul>
@@ -129,13 +132,15 @@ export const JobCard = ({ job, onRetry }: JobCardProps): JSX.Element => {
         </div>
       )}
 
-      <div className="job-meta">
-        {job.metadata.width && job.metadata.height && (
-          <span>{job.metadata.width}×{job.metadata.height}</span>
-        )}
-        {job.metadata.format && <span>· {job.metadata.format.toUpperCase()}</span>}
-        {job.metadata.bytes ? <span>· {formatBytes(job.metadata.bytes)}</span> : null}
-      </div>
+      {!compact && (
+        <div className="job-meta">
+          {job.metadata.width && job.metadata.height && (
+            <span>{job.metadata.width}×{job.metadata.height}</span>
+          )}
+          {job.metadata.format && <span>· {job.metadata.format.toUpperCase()}</span>}
+          {job.metadata.bytes ? <span>· {formatBytes(job.metadata.bytes)}</span> : null}
+        </div>
+      )}
 
       {isCompleted && job.resultUrl && (
         <div className="result-block">

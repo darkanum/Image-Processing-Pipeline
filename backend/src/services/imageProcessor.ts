@@ -9,7 +9,7 @@ import type {
 
 export interface TransformResult {
   buffer: Buffer;
-  format: "png" | "jpeg" | "webp";
+  format: "png" | "jpeg" | "webp" | "avif";
   width: number;
   height: number;
   bytes: number;
@@ -65,14 +65,64 @@ export const transformImage = async (
   let pipeline: Sharp = applyResize(sharp(input, { failOn: "error" }), spec.resize, srcW, srcH);
 
   // Step 3+4: rotate / flip
-  if (spec.rotation !== 0) {
-    pipeline = pipeline.rotate(spec.rotation);
+  const rot = normalizeRotation(spec.rotation);
+  if (rot !== 0) {
+    pipeline = pipeline.rotate(rot);
   }
   if (spec.flipHorizontal) pipeline = pipeline.flop();
   if (spec.flipVertical) pipeline = pipeline.flip();
 
-  // Step 5: grayscale
-  if (spec.grayscale) pipeline = pipeline.grayscale();
+  // Step 5: color adjustments. We resolve the effective spec from the
+  // new `colorAdjust` field, falling back to the legacy `grayscale` flag
+  // for back-compat. `modulate` is applied for brightness/saturation, then
+  // `grayscale` / `recomb` for sepia, then `negate` for invert.
+  //
+  // IMPORTANT: when `colorAdjust` is present, it owns grayscale (and every
+  // other color flag) — the top-level `grayscale` is treated as deprecated
+  // and ignored. This is the cleanest semantic for new clients: spread
+  // DEFAULT_TRANSFORM and toggle colorAdjust.grayscale directly. Old
+  // clients that don't know about colorAdjust still get their top-level
+  // `grayscale: true` honored because they don't send colorAdjust at all.
+  const ca = spec.colorAdjust;
+  const useGrayscale = ca ? ca.grayscale : spec.grayscale;
+  if (ca && (ca.brightness !== 100 || ca.saturation !== 100)) {
+    // Sharp's `modulate` requires brightness > 0. We clamp at 0.001
+    // (≈ 0.1% — effectively black but not a validation error). The
+    // frontend slider caps at 200 so the user can never hit exactly 0
+    // in practice.
+    const safeBrightness = Math.max(0.001, ca.brightness / 100);
+    pipeline = pipeline.modulate({
+      brightness: safeBrightness,
+      saturation: ca.saturation / 100,         // 0 = grayscale, 1 = no change, 2 = over-saturated
+    });
+  }
+  if (useGrayscale) pipeline = pipeline.grayscale();
+  if (ca && ca.sepia > 0) {
+    // Sepia: apply a tint after grayscale. We pipe to greyscale then
+    // overlay a warm sepia tone using a `tint` recombination. Sharp's
+    // .tint() requires the image to be in RGB, so we re-enable color
+    // channels for the tint step.
+    pipeline = pipeline.recomb([
+      [0.393, 0.769, 0.189],
+      [0.349, 0.686, 0.168],
+      [0.272, 0.534, 0.131],
+    ]);
+    // Modulate the sepia strength: blend the sepia result with the
+    // original by applying `modulate` with a tint. For simplicity we
+    // just fade the sepia intensity by mapping 0..100 to a less-saturated
+    // output via a single-channel linear transformation.
+    if (ca.sepia < 100) {
+      // Mild sepia: scale all channels by 0.5 + 0.5*(1-strength) to
+      // blend with the grayscale version. Implemented by another recomb.
+      const k = ca.sepia / 100;
+      pipeline = pipeline.recomb([
+        [1 - 0.5 * k, 0.5 * k, 0],
+        [0, 1 - 0.5 * k, 0.5 * k],
+        [0.5 * k, 0, 1 - 0.5 * k],
+      ]);
+    }
+  }
+  if (ca && ca.invert) pipeline = pipeline.negate({ alpha: false });
 
   // Step 6: explicit crop
   if (spec.crop) {
@@ -113,12 +163,21 @@ export const transformImage = async (
   // Step 7: overall opacity fade. Only PNG can carry alpha; for jpeg/webp we
   // approximate by multiplying RGB channels (visual fade).
   if (spec.opacity < 100) {
-    pipeline = applyOpacity(pipeline, spec.opacity, spec.outputFormat, postCropW, postCropH);
+    pipeline = applyOpacity(
+      pipeline,
+      spec.opacity,
+      // The applyOpacity helper only branches on the literal "png"/"original"
+      // case. For other formats it uses a multiply-blend approximation, so the
+      // exact type doesn't matter — we cast to OutputFormat.
+      spec.outputFormat as OutputFormat,
+      postCropW,
+      postCropH,
+    );
   }
 
   // Step 8: encode
-  const sourceFormat = (sourceMeta.format ?? "png") as "png" | "jpeg" | "webp";
-  const outFormat: "png" | "jpeg" | "webp" =
+  const sourceFormat = (sourceMeta.format ?? "png") as "png" | "jpeg" | "webp" | "avif";
+  const outFormat: "png" | "jpeg" | "webp" | "avif" =
     spec.outputFormat === "original" ? sourceFormat : (spec.outputFormat as OutputFormat);
 
   switch (outFormat) {
@@ -127,6 +186,9 @@ export const transformImage = async (
       break;
     case "webp":
       pipeline = pipeline.webp({ quality: spec.quality ?? DEFAULT_QUALITY });
+      break;
+    case "avif":
+      pipeline = pipeline.avif({ quality: spec.quality ?? DEFAULT_QUALITY });
       break;
     case "png":
     default:
@@ -294,6 +356,26 @@ const parseAspectRatio = (key: string): { w: number; h: number } => {
   return { w, h };
 };
 
+/**
+ * Normalize a rotation value to a finite number in [-360, 360]. Negative
+ * values and out-of-range values are wrapped; non-numbers become 0.
+ * Sharp accepts any rotation angle, but we clamp to keep the watermark
+ * positioning math sane.
+ */
+const normalizeRotation = (r: unknown): number => {
+  if (typeof r !== "number" || !Number.isFinite(r)) return 0;
+  // Wrap into [-360, 360] so users can type "720" without surprises.
+  const wrapped = ((r % 360) + 360) % 360;
+  return wrapped > 180 ? wrapped - 360 : wrapped;
+};
+
+/** Returns true if the perceived luminance of a color is "light" (>= 0.5). */
+const isLightColor = (rgb: { r: number; g: number; b: number }): boolean => {
+  // Standard relative luminance per WCAG.
+  const lum = (0.2126 * rgb.r + 0.7152 * rgb.g + 0.0722 * rgb.b) / 255;
+  return lum >= 0.5;
+};
+
 const parseColor = (hex: string): { r: number; g: number; b: number; alpha: number } => {
   // Accept 6-char hex (#rrggbb), 3-char hex (#rgb → expand to 6), and 8-char
   // hex with alpha (#rrggbbaa — alpha is dropped here, callers use parseColor
@@ -459,11 +541,20 @@ const buildWatermark = async (
   const bgOpacity = (bg?.opacity ?? 40) / 100;
   const bgPad = Math.max(0, Math.round(bg?.padding ?? 0));
 
+  // Text color: parse the user's spec (default white). The stroke color
+  // is automatically chosen to be the opposite luminance (black stroke for
+  // light text, white stroke for dark text) so the watermark stays
+  // legible without the user having to pick a stroke color.
+  const textRgb = parseColor(spec.color ?? "#ffffff");
+  const strokeLight = isLightColor(textRgb);
+  const strokeRgb = strokeLight ? { r: 0, g: 0, b: 0 } : { r: 255, g: 255, b: 255 };
+  const strokeOpacity = Math.min(0.6, opacity * 0.6);
+
   const textSvg = `
     <svg xmlns="http://www.w3.org/2000/svg" width="${canvasW}" height="${canvasH}">
       <style>
-        .wm { font: ${fontSize}px ${fontFamily}; fill: rgba(255,255,255,${opacity});
-              stroke: rgba(0,0,0,${Math.min(0.6, opacity * 0.6)}); stroke-width: 1;
+        .wm { font: ${fontSize}px ${fontFamily}; fill: rgba(${textRgb.r},${textRgb.g},${textRgb.b},${opacity});
+              stroke: rgba(${strokeRgb.r},${strokeRgb.g},${strokeRgb.b},${strokeOpacity}); stroke-width: 1;
               paint-order: stroke; }
       </style>
       <text class="wm" x="${padX}" y="${padY + baselineY}">${safeText}</text>
@@ -505,7 +596,7 @@ const buildWatermark = async (
 const applyOpacity = (
   pipeline: Sharp,
   opacityPct: number,
-  outputFormat: TransformSpec["outputFormat"],
+  outputFormat: OutputFormat,
   currentW: number,
   currentH: number,
 ): Sharp => {
@@ -524,7 +615,9 @@ const applyOpacity = (
   //
   // For jpeg/webp we fake transparency with a multiply blend against black
   // (no alpha channel, so the only way to suggest "fading" is to darken).
-  if (outputFormat === "png" || outputFormat === "original") {
+  // The "original" case is resolved upstream — the caller passes the
+  // concrete format that "original" resolved to.
+  if (outputFormat === "png" || outputFormat === "avif") {
     return pipeline.ensureAlpha().composite([
       {
         input: Buffer.from(

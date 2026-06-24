@@ -8,7 +8,7 @@ export type JobStatus =
 
 export type JobStep = "queued" | "downloading" | "processing" | "uploading" | "completed";
 
-export type OutputFormat = "png" | "jpeg" | "webp" | "original";
+export type OutputFormat = "png" | "jpeg" | "webp" | "avif" | "original";
 
 export type WatermarkPosition =
   | "top-left" | "top-center" | "top-right"
@@ -19,7 +19,14 @@ export type WatermarkKind = "text" | "image";
 
 export type ResizeMode = "fit" | "crop" | "pad" | "none";
 
-export type Rotation = 0 | 90 | 180 | 270;
+/** Any rotation angle in degrees (typically -180..180). */
+export type Rotation = number;
+
+/** Output formats that preserve the alpha channel. */
+export const ALPHA_FORMATS: ReadonlySet<OutputFormat> = new Set(["png", "avif", "original"]);
+
+/** True if the given output format preserves alpha. */
+export const formatSupportsAlpha = (f: OutputFormat): boolean => ALPHA_FORMATS.has(f);
 
 export interface ResizeSpec {
   mode: ResizeMode;
@@ -46,6 +53,8 @@ export interface WatermarkSpec {
   margin: number;
   opacity: number;
   size: number;
+  /** Text fill color (hex). Only used for kind=text. Defaults to white. */
+  color?: string;
   /** Optional backing rectangle behind the text/image. */
   background?: {
     enabled: boolean;
@@ -62,12 +71,22 @@ export const DEFAULT_WATERMARK_BACKGROUND = {
   padding: 6,
 };
 
+export interface ColorAdjustSpec {
+  grayscale: boolean;
+  brightness: number;     // 0-200, 100 = no change
+  saturation: number;     // 0-200, 100 = no change
+  sepia: number;          // 0-100
+  invert: boolean;
+}
+
 export interface TransformSpec {
   outputFormat: OutputFormat;
   quality: number;
   resize: ResizeSpec | null;
   crop: CropSpec | null;
+  /** @deprecated use colorAdjust.grayscale. */
   grayscale: boolean;
+  colorAdjust: ColorAdjustSpec;
   watermark: WatermarkSpec | null;
   rotation: Rotation;
   flipHorizontal: boolean;
@@ -116,12 +135,21 @@ export const STATUS_COLOR: Record<JobStatus, string> = {
   failed: "#ef4444",
 };
 
+export const DEFAULT_COLOR_ADJUST: ColorAdjustSpec = {
+  grayscale: false,
+  brightness: 100,
+  saturation: 100,
+  sepia: 0,
+  invert: false,
+};
+
 export const DEFAULT_TRANSFORM: TransformSpec = {
   outputFormat: "original",
   quality: 82,
   resize: null,
   crop: null,
   grayscale: false,
+  colorAdjust: { ...DEFAULT_COLOR_ADJUST },
   watermark: null,
   rotation: 0,
   flipHorizontal: false,
@@ -143,6 +171,7 @@ export const DEFAULT_WATERMARK: WatermarkSpec = {
   margin: 24,
   opacity: 70,
   size: 32,
+  color: "#ffffff",
   background: { ...DEFAULT_WATERMARK_BACKGROUND },
 };
 

@@ -31,6 +31,7 @@ const watermarkSchema = z
     margin: z.number().int().min(0).max(500).openapi({ description: "Distance from the chosen edge in pixels." }),
     opacity: z.number().int().min(0).max(100).openapi({ description: "Watermark opacity (0-100%)." }),
     size: z.number().int().min(8).max(2000).openapi({ description: "Font size (px) for text, or rendered width (px) for image." }),
+    color: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional().openapi({ description: "Text fill color (hex). Only used for kind=text. The outline is auto-chosen (black for light text, white for dark) for legibility. Defaults to white." }),
     background: z
       .object({
         enabled: z.boolean().default(true).openapi({ description: "When false, the watermark is rendered with no backing rectangle (transparent)." }),
@@ -46,6 +47,18 @@ const watermarkSchema = z
       }),
   })
   .openapi("Watermark");
+
+const colorAdjustSchema = z
+  .object({
+    grayscale: z.boolean().default(false).openapi({ description: "Convert to grayscale." }),
+    brightness: z.number().int().min(0).max(200).default(100).openapi({ description: "Brightness multiplier (0-200, 100 = no change)." }),
+    saturation: z.number().int().min(0).max(200).default(100).openapi({ description: "Saturation multiplier (0-200, 100 = no change, 0 = grayscale)." }),
+    sepia: z.number().int().min(0).max(100).default(0).openapi({ description: "Sepia tint strength (0-100, 0 = no effect)." }),
+    invert: z.boolean().default(false).openapi({ description: "Invert all colors." }),
+  })
+  .openapi("ColorAdjust", {
+    description: "Color adjustment filters applied after resize and before watermark. All values default to identity / off.",
+  });
 
 const resizeSchema = z
   .object({
@@ -73,20 +86,21 @@ const cropSchema = z
 
 const transformSchema = z
   .object({
-    outputFormat: z.enum(["png", "jpeg", "webp", "original"]).default("original")
+    outputFormat: z.enum(["png", "jpeg", "webp", "avif", "original"]).default("original")
       .openapi({ description: "Output format. 'original' keeps the source format." }),
     quality: z.number().int().min(1).max(100).default(82)
       .openapi({ description: "Encoder quality (1-100). Higher = larger file, better fidelity." }),
     resize: resizeSchema.nullable().default(null),
     crop: cropSchema.nullable().default(null),
-    grayscale: z.boolean().default(false),
+    grayscale: z.boolean().default(false).openapi({ description: "DEPRECATED: use colorAdjust.grayscale. Kept for back-compat." }),
+    colorAdjust: colorAdjustSchema.optional().openapi({ description: "Color adjustment filters. Replaces the deprecated `grayscale` flag." }),
     watermark: watermarkSchema.nullable().default(null),
-    rotation: z.union([z.literal(0), z.literal(90), z.literal(180), z.literal(270)]).default(0)
-      .openapi({ description: "Rotation in degrees (0/90/180/270)." }),
+    rotation: z.number().min(-360).max(360).default(0)
+      .openapi({ description: "Rotation in degrees. Any value in [-360, 360] is accepted; out-of-range values are wrapped. Common presets are 0/90/180/270." }),
     flipHorizontal: z.boolean().default(false),
     flipVertical: z.boolean().default(false),
     opacity: z.number().int().min(0).max(100).default(100)
-      .openapi({ description: "Overall image opacity (0-100%)." }),
+      .openapi({ description: "Overall image opacity (0-100%). Only meaningful for output formats that support alpha (PNG, AVIF)." }),
   })
   .openapi("Transform");
 
@@ -148,6 +162,7 @@ export {
   watermarkSchema,
   resizeSchema,
   cropSchema,
+  colorAdjustSchema,
   transformSchema,
   jobRecordSchema,
   errorResponseSchema,

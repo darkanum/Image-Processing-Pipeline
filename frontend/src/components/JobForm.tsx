@@ -6,6 +6,7 @@ import {
   DEFAULT_WATERMARK,
   DEFAULT_WATERMARK_BACKGROUND,
   MAX_IMAGE_BYTES,
+  formatSupportsAlpha,
 } from "../types/job";
 import { apiRequest, ApiError } from "../lib/api";
 import { ColorHexInput } from "./ColorHexInput";
@@ -447,12 +448,39 @@ export const JobForm = ({ apiUrl: _apiUrl, onCreated }: JobFormProps): JSX.Eleme
                   key={deg}
                   type="button"
                   className={`seg-btn ${transform.rotation === deg ? "active" : ""}`}
-                  onClick={() => setTransformPart("rotation", deg as TransformSpec["rotation"])}
+                  onClick={() => setTransformPart("rotation", deg)}
                   aria-pressed={transform.rotation === deg}
                 >
                   {deg}°
                 </button>
               ))}
+            </div>
+            <div className="rotate-custom">
+              <span className="rotate-custom-label">Custom</span>
+              <input
+                type="number"
+                className="form-input rotate-custom-input"
+                min={-180}
+                max={180}
+                step={1}
+                value={Math.round(transform.rotation)}
+                onChange={(e) => {
+                  const n = Number(e.target.value);
+                  if (Number.isFinite(n)) setTransformPart("rotation", Math.max(-180, Math.min(180, n)));
+                }}
+                aria-label="Custom rotation angle in degrees"
+              />
+              <span className="rotate-custom-suffix">°</span>
+              <input
+                type="range"
+                className="form-input slider rotate-slider"
+                min={-180}
+                max={180}
+                step={1}
+                value={transform.rotation}
+                onChange={(e) => setTransformPart("rotation", Number(e.target.value))}
+                aria-label="Custom rotation slider"
+              />
             </div>
           </div>
           <div className="adjust-field">
@@ -476,37 +504,108 @@ export const JobForm = ({ apiUrl: _apiUrl, onCreated }: JobFormProps): JSX.Eleme
               </button>
             </div>
           </div>
-          <div className="adjust-field">
-            <span className="form-label">Color</span>
-            <div className="seg-buttons">
-              <button
-                type="button"
-                className={`seg-btn ${transform.grayscale ? "active" : ""}`}
-                onClick={() => setTransformPart("grayscale", !transform.grayscale)}
-                aria-pressed={transform.grayscale}
-              >
-                {transform.grayscale ? "B&W" : "Color"}
-              </button>
+        </div>
+
+        {/* ── Color filters (new) ──────────────────────────────── */}
+        <div className="color-filters">
+          <div className="color-filters-head">
+            <span className="form-block-title">Color</span>
+            <span className="muted small">Apply one or more color filters</span>
+          </div>
+          <div className="color-filter-chips">
+            <label className={`filter-chip ${transform.colorAdjust.grayscale ? "active" : ""}`}>
+              <input
+                type="checkbox"
+                checked={transform.colorAdjust.grayscale}
+                onChange={(e) => setTransformPart("colorAdjust", { ...transform.colorAdjust, grayscale: e.target.checked })}
+              />
+              <span>B&amp;W</span>
+              <span className="filter-chip-hint">Grayscale</span>
+            </label>
+            <label className={`filter-chip ${transform.colorAdjust.invert ? "active" : ""}`}>
+              <input
+                type="checkbox"
+                checked={transform.colorAdjust.invert}
+                onChange={(e) => setTransformPart("colorAdjust", { ...transform.colorAdjust, invert: e.target.checked })}
+              />
+              <span>Invert</span>
+              <span className="filter-chip-hint">Negate colors</span>
+            </label>
+            <label className={`filter-chip ${transform.colorAdjust.sepia > 0 ? "active" : ""}`}>
+              <input
+                type="checkbox"
+                checked={transform.colorAdjust.sepia > 0}
+                onChange={(e) => setTransformPart("colorAdjust", { ...transform.colorAdjust, sepia: e.target.checked ? 80 : 0 })}
+              />
+              <span>Sepia</span>
+              <span className="filter-chip-hint">Warm tint</span>
+            </label>
+          </div>
+          <div className="color-filter-sliders">
+            <label className="form-field">
+              <span className="form-label">Brightness · <b>{transform.colorAdjust.brightness}%</b></span>
+              <input
+                type="range"
+                className="form-input slider"
+                min={0}
+                max={200}
+                step={1}
+                value={transform.colorAdjust.brightness}
+                onChange={(e) => setTransformPart("colorAdjust", { ...transform.colorAdjust, brightness: Number(e.target.value) })}
+                aria-label="Brightness"
+              />
+            </label>
+            <label className="form-field">
+              <span className="form-label">Saturation · <b>{transform.colorAdjust.saturation}%</b></span>
+              <input
+                type="range"
+                className="form-input slider"
+                min={0}
+                max={200}
+                step={1}
+                value={transform.colorAdjust.saturation}
+                onChange={(e) => setTransformPart("colorAdjust", { ...transform.colorAdjust, saturation: Number(e.target.value) })}
+                aria-label="Saturation"
+              />
+            </label>
+            {transform.colorAdjust.sepia > 0 && (
+              <label className="form-field">
+                <span className="form-label">Sepia strength · <b>{transform.colorAdjust.sepia}%</b></span>
+                <input
+                  type="range"
+                  className="form-input slider"
+                  min={0}
+                  max={100}
+                  step={1}
+                  value={transform.colorAdjust.sepia}
+                  onChange={(e) => setTransformPart("colorAdjust", { ...transform.colorAdjust, sepia: Number(e.target.value) })}
+                  aria-label="Sepia strength"
+                />
+              </label>
+            )}
+          </div>
+        </div>
+
+        {/* Image opacity — only meaningful for alpha-capable output formats */}
+        {formatSupportsAlpha(transform.outputFormat) && (
+          <div className="adjust-opacity">
+            <label className="form-label">
+              Image opacity <span className="form-label-value">{transform.opacity}%</span>
+            </label>
+            <input
+              type="range"
+              className="form-input slider"
+              min={0}
+              max={100}
+              value={transform.opacity}
+              onChange={(e) => setTransformPart("opacity", Number(e.target.value))}
+              aria-label="Image opacity"
+            />
+            <div className="hint">
+              Fades the whole image. <code>{transform.outputFormat === "original" ? "Source format" : transform.outputFormat.toUpperCase()}</code> preserves alpha; other formats approximate by darkening.
             </div>
           </div>
-        </div>
-        <div className="adjust-opacity">
-          <label className="form-label">
-            Image opacity <span className="form-label-value">{transform.opacity}%</span>
-          </label>
-          <input
-            className="form-input slider"
-            type="range"
-            min={0}
-            max={100}
-            value={transform.opacity}
-            onChange={(e) => setTransformPart("opacity", Number(e.target.value))}
-            aria-label="Image opacity"
-          />
-          <div className="hint">
-            Fades the whole image. <code>PNG</code> keeps true alpha; <code>JPEG</code>/<code>WebP</code> approximate with a multiply blend against black.
-          </div>
-        </div>
+        )}
       </div>
 
       {error && (
@@ -606,6 +705,45 @@ const WatermarkEditor = ({ value, onChange }: WatermarkEditorProps): JSX.Element
           onChange={(e) => update({ imageUrl: e.target.value })}
           placeholder="https://example.com/logo.png"
         />
+      )}
+
+      {/* Text color (only meaningful for kind=text) */}
+      {value.kind === "text" && (
+        <div className="color-field">
+          <span>Text color</span>
+          <div className="color-row">
+            <input
+              type="color"
+              value={value.color ?? "#ffffff"}
+              onChange={(e) => update({ color: e.target.value })}
+              aria-label="Watermark text color"
+            />
+            <ColorHexInput
+              className="form-input color-hex"
+              value={value.color ?? "#ffffff"}
+              onChange={(v) => update({ color: v })}
+              aria-label="Watermark text color hex"
+            />
+            <div className="pad-bg-presets">
+              {[
+                { label: "White", value: "#ffffff" },
+                { label: "Black", value: "#000000" },
+                { label: "Red", value: "#ef4444" },
+                { label: "Blue", value: "#3b82f6" },
+                { label: "Yellow", value: "#facc15" },
+              ].map((p) => (
+                <button
+                  key={p.label}
+                  type="button"
+                  className={`preset-pill ${value.color === p.value ? "active" : ""}`}
+                  onClick={() => update({ color: p.value })}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
       )}
 
       <div className="wm-position-picker" role="radiogroup" aria-label="Watermark position">
