@@ -8,7 +8,13 @@ import {
   uploadResult,
 } from "../services/jobRepository.js";
 import { logger } from "../utils/logger.js";
-import { DEFAULT_TRANSFORM, type ProgressUpdate, type TransformSpec } from "../types/job.js";
+import { getEnv } from "../config/env.js";
+import {
+  DEFAULT_TRANSFORM,
+  type ProgressUpdate,
+  type TransformSpec,
+} from "../types/job.js";
+import { imageBytesProcessed } from "../observability/metrics.js";
 
 interface JobPayload {
   url: string;
@@ -41,6 +47,7 @@ export const processImageJob = async (
 ): Promise<void> => {
   const id = String(job.id);
   const url = payload?.url;
+  const env = getEnv();
   const transform: TransformSpec = payload?.transform
     ? { ...DEFAULT_TRANSFORM, ...payload.transform }
     : DEFAULT_TRANSFORM;
@@ -52,6 +59,15 @@ export const processImageJob = async (
   }
 
   logger.info({ id, url, attempt: job.attemptsMade + 1 }, "processing job");
+
+  // Hard timeout: the entire job (download + transform + upload) must
+  // complete within JOB_HARD_TIMEOUT_MS. If we exceed it, we mark the
+  // job as failed with a clear reason.
+  const timeoutHandle = setTimeout(async () => {
+    logger.error({ id, timeoutMs: env.JOB_HARD_TIMEOUT_MS }, "worker: hard timeout exceeded");
+    await markJobFailed(id, `Hard timeout exceeded (${env.JOB_HARD_TIMEOUT_MS}ms)`);
+  }, env.JOB_HARD_TIMEOUT_MS);
+  // We don't .unref() — the timer is what fails the job if we hang.
 
   // Step 1: download
   await reportProgress(id, {
@@ -77,6 +93,7 @@ export const processImageJob = async (
   await updateJobMetadata(id, {
     metadata: { bytes: downloaded.bytes, format: downloaded.contentType.split("/")[1] ?? "unknown" },
   });
+  imageBytesProcessed.inc(downloaded.bytes);
 
   // Step 2: transform
   await reportProgress(id, {
@@ -127,6 +144,7 @@ export const processImageJob = async (
     resultUrl,
     metadata: { bytes: transformed.bytes },
   });
+  clearTimeout(timeoutHandle);
 };
 
 /**

@@ -1,11 +1,12 @@
-import { useState, type FormEvent } from "react";
+import { useMemo, useState, type FormEvent } from "react";
 import type { OutputFormat, TransformSpec } from "../types/job";
-import { DEFAULT_TRANSFORM, MAX_IMAGE_BYTES } from "../types/job";
+import { DEFAULT_TRANSFORM, DEFAULT_RESIZE, DEFAULT_WATERMARK, MAX_IMAGE_BYTES } from "../types/job";
 import { ResizeSection } from "./ResizeSection";
 import { CropSection } from "./CropSection";
 import { WatermarkSection } from "./WatermarkSection";
 import { RotateFlipSection } from "./RotateFlipSection";
 import { Section, Slider } from "./controls";
+import { apiRequest, ApiError } from "../lib/api";
 
 interface JobFormProps {
   apiUrl: string;
@@ -25,242 +26,234 @@ const resizeBadge = (r: NonNullable<TransformSpec["resize"]>): string => {
   return "on";
 };
 
-export const JobForm = ({ apiUrl, onCreated }: JobFormProps): JSX.Element => {
+/** A few quick-pick URLs that always work in the demo (no auth, no rate limit). */
+const QUICK_PICKS: { label: string; url: string }[] = [
+  { label: "Picsum 800×600", url: "https://picsum.photos/800/600" },
+  { label: "Picsum 1920×1080", url: "https://picsum.photos/1920/1080" },
+  { label: "Picsum 600×600", url: "https://picsum.photos/600/600" },
+];
+
+/**
+ * Cheap pre-flight check on the URL — we don't want the user to wait 20s
+ * for the worker to download a 404, only to find out the URL is wrong.
+ * This catches the obvious cases; the worker still does the real check.
+ */
+type UrlCheck = { kind: "idle" } | { kind: "ok"; host: string } | { kind: "warn"; reason: string } | { kind: "err"; reason: string };
+const checkUrl = (raw: string): UrlCheck => {
+  const v = raw.trim();
+  if (!v) return { kind: "idle" };
+  let u: URL;
+  try {
+    u = new URL(v);
+  } catch {
+    return { kind: "err", reason: "Not a valid URL" };
+  }
+  if (u.protocol !== "http:" && u.protocol !== "https:") {
+    return { kind: "err", reason: `Protocol ${u.protocol.replace(":", "")} not allowed — use http(s)` };
+  }
+  // Heuristics that catch the most common 404s without doing a real HEAD.
+  const host = u.hostname;
+  if (host === "" || host === "localhost" || host === "127.0.0.1" || host === "0.0.0.0") {
+    return { kind: "warn", reason: "Localhost URL — only works if the worker can reach it" };
+  }
+  return { kind: "ok", host };
+};
+
+export const JobForm = ({ apiUrl: _apiUrl, onCreated }: JobFormProps): JSX.Element => {
+  void _apiUrl; // apiBase() in lib/api handles this now
   const [url, setUrl] = useState<string>("https://picsum.photos/800/600");
   const [transform, setTransform] = useState<TransformSpec>(DEFAULT_TRANSFORM);
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [showOptions, setShowOptions] = useState<boolean>(false);
+  const [requestId, setRequestId] = useState<string | null>(null);
 
-  // Each section is collapsible; only one open at a time to keep the page calm.
-  const [openSection, setOpenSection] = useState<string | null>(null);
-  const toggleSection = (s: string): void => setOpenSection((cur) => (cur === s ? null : s));
+  const urlCheck = useMemo(() => checkUrl(url), [url]);
 
-  const updateTransform = (patch: Partial<TransformSpec>): void => {
-    setTransform((t) => ({ ...t, ...patch }));
+  const setTransformPart = <K extends keyof TransformSpec>(key: K, value: TransformSpec[K]): void => {
+    setTransform((prev) => ({ ...prev, [key]: value }));
   };
 
-  const buildPayload = (): { url: string; transform: TransformSpec } => {
-    const cleanWatermark =
-      transform.watermark &&
-      ((transform.watermark.kind === "text" && (transform.watermark.text ?? "").trim() !== "") ||
-        (transform.watermark.kind === "image" && (transform.watermark.imageUrl ?? "").trim() !== ""))
-        ? transform.watermark
-        : null;
-    const cleanResize =
-      transform.resize && transform.resize.mode !== "none" ? transform.resize : null;
-    const cleanCrop = transform.crop ? transform.crop : null;
-
-    return {
-      url: url.trim(),
-      transform: {
-        ...transform,
-        watermark: cleanWatermark,
-        resize: cleanResize,
-        crop: cleanCrop,
-      },
-    };
-  };
+  const buildPayload = (): { url: string; transform: TransformSpec } => ({
+    url: url.trim(),
+    transform,
+  });
 
   const handleSubmit = async (e: FormEvent<HTMLFormElement>): Promise<void> => {
     e.preventDefault();
+    if (urlCheck.kind === "err") {
+      setError(urlCheck.reason);
+      return;
+    }
     setError(null);
+    setRequestId(null);
     setSubmitting(true);
     try {
       const payload = buildPayload();
-      const res = await fetch(`${apiUrl}/api/jobs`, {
+      const job = await apiRequest<{ id: string }>("/jobs", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        body: payload,
       });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error ?? `Request failed (${res.status})`);
-      }
-      const job = (await res.json()) as { id: string };
       onCreated?.(job);
       setUrl("");
     } catch (err) {
-      const message =
-        err instanceof TypeError && err.message === "Failed to fetch"
-          ? "Failed to fetch — backend unreachable. Is the API container running?"
-          : err instanceof Error
-            ? err.message
-            : String(err);
-      setError(message);
+      if (err instanceof ApiError) {
+        setRequestId(err.requestId ?? null);
+        // Friendlier messages for common cases.
+        let message = err.message;
+        if (err.status === 401) {
+          message = "API key missing or invalid. The backend rejected the request.";
+        } else if (err.status === 429) {
+          message = "Rate limit hit. Wait a moment and try again.";
+        } else if (err.status >= 500) {
+          message = `Server error (${err.status}). The team has been notified.`;
+        }
+        setError(message);
+      } else {
+        setError(err instanceof Error ? err.message : String(err));
+      }
     } finally {
       setSubmitting(false);
     }
   };
 
+  const submitDisabled = submitting || urlCheck.kind === "err" || url.trim() === "";
+
   return (
-    <form className="job-form" onSubmit={handleSubmit}>
-      {/* --- URL row (primary) --- */}
+    <form className="job-form" onSubmit={handleSubmit} noValidate>
       <div className="form-row">
-        <label htmlFor="job-url" className="form-label">Source image URL</label>
-        <div className="url-row">
-          <input
-            id="job-url"
-            type="url"
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            placeholder="https://example.com/cat.jpg"
-            required
-            disabled={submitting}
-            className="url-input"
-          />
-          <button type="submit" className="submit-btn" disabled={submitting || url.trim().length === 0}>
-            {submitting ? "Submitting…" : "Process image"}
-          </button>
+        <label htmlFor="url-input" className="form-label">
+          Image URL
+        </label>
+        <input
+          id="url-input"
+          className="form-input"
+          type="url"
+          inputMode="url"
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+          placeholder="https://example.com/image.jpg"
+          aria-describedby="url-help"
+          aria-invalid={urlCheck.kind === "err"}
+          autoComplete="off"
+          spellCheck={false}
+          required
+        />
+        <div id="url-help" className={`url-validation ${urlCheck.kind}`} aria-live="polite">
+          {urlCheck.kind === "ok" && <>✓ Will fetch from {urlCheck.host}</>}
+          {urlCheck.kind === "warn" && <>⚠ {urlCheck.reason}</>}
+          {urlCheck.kind === "err" && <>✕ {urlCheck.reason}</>}
+          {urlCheck.kind === "idle" && <>Paste any http(s) image URL — or pick one below</>}
         </div>
-        <div className="size-note">
-          ⚠ Source images larger than <strong>{formatBytes(MAX_IMAGE_BYTES)}</strong> are rejected before processing.
-        </div>
-        {error && <div className="error">⚠ {error}</div>}
-      </div>
-
-      {/* --- Output format (always visible, primary concern) --- */}
-      <div className="form-row">
-        <label className="form-label">Output format</label>
-        <div className="format-row">
-          <label className="select">
-            <select
-              value={transform.outputFormat}
-              onChange={(e) => updateTransform({ outputFormat: e.target.value as OutputFormat })}
-              className="format-select"
+        <div className="preset-pills" aria-label="Quick picks">
+          {QUICK_PICKS.map((p) => (
+            <button
+              key={p.url}
+              type="button"
+              className={`preset-pill ${url === p.url ? "active" : ""}`}
+              onClick={() => setUrl(p.url)}
+              aria-pressed={url === p.url}
             >
-              <option value="original">Same as source</option>
-              <option value="png">PNG (lossless, supports transparency)</option>
-              <option value="jpeg">JPEG (smaller files)</option>
-              <option value="webp">WebP (modern, balanced)</option>
-            </select>
-          </label>
-          {(transform.outputFormat === "jpeg" || transform.outputFormat === "webp") && (
-            <div className="quality-block">
-              <Slider
-                label="Quality"
-                value={transform.quality}
-                onChange={(n) => updateTransform({ quality: n })}
-                min={1}
-                max={100}
-              />
-            </div>
-          )}
+              {p.label}
+            </button>
+          ))}
         </div>
       </div>
 
-      {/* --- Advanced options toggle --- */}
       <button
         type="button"
-        className="options-toggle"
+        className="toggle-options"
         onClick={() => setShowOptions((v) => !v)}
+        aria-expanded={showOptions}
+        aria-controls="transform-options"
       >
-        {showOptions ? "▾ Hide" : "▸ Show"} processing options
-        {(transform.resize || transform.crop || transform.grayscale || transform.watermark ||
-          transform.rotation !== 0 || transform.flipHorizontal || transform.flipVertical ||
-          transform.opacity < 100) && (
-          <span className="options-active-dot">●</span>
-        )}
+        {showOptions ? "▾" : "▸"} Transform options{" "}
+        <span className="muted">
+          ({transform.outputFormat}, q{transform.quality}, {resizeBadge(transform.resize ?? DEFAULT_RESIZE)})
+        </span>
       </button>
 
       {showOptions && (
-        <div className="options-body">
-          <Section
-            title="Resize"
-            open={openSection === "resize"}
-            onToggle={() => toggleSection("resize")}
-            badge={
-              transform.resize && transform.resize.mode !== "none"
-                ? resizeBadge(transform.resize)
-                : "off"
-            }
-          >
-            <ResizeSection
-              value={
-                transform.resize ?? { mode: "none", lockAspectRatio: true }
-              }
-              onChange={(v) => updateTransform({ resize: v.mode === "none" ? null : v })}
-            />
-          </Section>
-
-          <Section
-            title="Crop"
-            open={openSection === "crop"}
-            onToggle={() => toggleSection("crop")}
-            badge={transform.crop ? "on" : "off"}
-          >
-            <CropSection
-              value={transform.crop ?? {}}
-              onChange={(v) => updateTransform({ crop: v.width || v.height || v.aspectRatio ? v : null })}
-            />
-          </Section>
-
-          <Section
-            title="Grayscale"
-            open={openSection === "grayscale"}
-            onToggle={() => {
-              updateTransform({ grayscale: !transform.grayscale });
-              setOpenSection((cur) => (cur === "grayscale" ? null : "grayscale"));
-            }}
-            badge={transform.grayscale ? "on" : "off"}
-          >
-            <div className="row">
-              <span>Convert the image to grayscale.</span>
+        <div id="transform-options" className="options-panel">
+          <Section title="Output" open onToggle={() => undefined}>
+            <div className="form-row">
+              <label htmlFor="format-select" className="form-label">Format</label>
+              <select
+                id="format-select"
+                className="form-input"
+                value={transform.outputFormat}
+                onChange={(e) => setTransformPart("outputFormat", e.target.value as OutputFormat)}
+              >
+                <option value="original">Original</option>
+                <option value="jpeg">JPEG</option>
+                <option value="png">PNG</option>
+                <option value="webp">WebP</option>
+                <option value="avif">AVIF</option>
+              </select>
             </div>
-          </Section>
-
-          <Section
-            title="Watermark"
-            open={openSection === "watermark"}
-            onToggle={() => toggleSection("watermark")}
-            badge={transform.watermark ? `${transform.watermark.kind} ${transform.watermark.position}` : "off"}
-          >
-            <WatermarkSection
-              value={
-                transform.watermark ?? {
-                  kind: "text",
-                  text: "Mavis Pipeline",
-                  position: "bottom-right",
-                  margin: 20,
-                  opacity: 80,
-                  size: 32,
-                }
-              }
-              onChange={(v) => updateTransform({ watermark: v })}
-            />
-          </Section>
-
-          <Section
-            title="Rotate & Flip"
-            open={openSection === "rotate"}
-            onToggle={() => toggleSection("rotate")}
-            badge={
-              transform.rotation !== 0 || transform.flipHorizontal || transform.flipVertical
-                ? "on"
-                : "off"
-            }
-          >
-            <RotateFlipSection transform={transform} onChange={(v) => updateTransform(v)} />
-          </Section>
-
-          <Section
-            title="Overall opacity"
-            open={openSection === "opacity"}
-            onToggle={() => toggleSection("opacity")}
-            badge={transform.opacity < 100 ? `${transform.opacity}%` : "100%"}
-          >
             <Slider
-              label="Output opacity"
-              value={transform.opacity}
-              onChange={(n) => updateTransform({ opacity: n })}
-              min={0}
+              label={`Quality (${transform.quality})`}
+              min={1}
               max={100}
-              unit="%"
+              value={transform.quality}
+              onChange={(v) => setTransformPart("quality", v)}
             />
-            <div className="hint">
-              Fades the whole image. PNG keeps the alpha channel; JPEG/WebP darkens via blend.
-            </div>
+            <Slider
+              label={`Opacity (${transform.opacity}%)`}
+              min={1}
+              max={100}
+              value={transform.opacity}
+              onChange={(v) => setTransformPart("opacity", v)}
+            />
           </Section>
+
+          <ResizeSection
+            value={transform.resize ?? DEFAULT_RESIZE}
+            onChange={(v) => setTransformPart("resize", v)}
+          />
+          <CropSection
+            value={transform.crop ?? {}}
+            onChange={(v) => setTransformPart("crop", v)}
+          />
+          <WatermarkSection
+            value={transform.watermark ?? DEFAULT_WATERMARK}
+            onChange={(v) => setTransformPart("watermark", v)}
+          />
+          <RotateFlipSection
+            transform={transform}
+            onChange={setTransform}
+          />
+
+          <div className="misc-row">
+            <label className="form-checkbox">
+              <input
+                type="checkbox"
+                checked={transform.grayscale}
+                onChange={(e) => setTransformPart("grayscale", e.target.checked)}
+              />
+              Grayscale
+            </label>
+          </div>
+
+          <div className="muted small">
+            Max source size: {formatBytes(MAX_IMAGE_BYTES)} — larger payloads are
+            rejected at the API.
+          </div>
+        </div>
+      )}
+
+      <div className="form-actions">
+        <button type="submit" className="primary" disabled={submitDisabled} aria-busy={submitting}>
+          {submitting ? "Submitting…" : "Process image"}
+        </button>
+      </div>
+
+      {error && (
+        <div className="error" role="alert">
+          ⚠ {error}
+          {requestId && (
+            <div className="error-requestid">Request id: <code>{requestId}</code></div>
+          )}
         </div>
       )}
     </form>

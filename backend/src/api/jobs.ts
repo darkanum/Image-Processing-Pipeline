@@ -7,6 +7,8 @@ import {
   listJobRecords,
 } from "../services/jobRepository.js";
 import { logger } from "../utils/logger.js";
+import { jobsEnqueuedTotal } from "../observability/metrics.js";
+import { apiError } from "../middleware/errorHandler.js";
 import { DEFAULT_TRANSFORM, type JobRecord, type TransformSpec } from "../types/job.js";
 
 const watermarkPosition = z.enum([
@@ -85,10 +87,8 @@ jobsRouter.post("/", async (req: Request, res: Response, next: NextFunction) => 
   try {
     const parsed = createJobSchema.safeParse(req.body);
     if (!parsed.success) {
-      return res.status(400).json({
-        error: "Invalid request",
-        issues: parsed.error.issues,
-      });
+      jobsEnqueuedTotal.inc({ status: "rejected" });
+      throw apiError(400, "Invalid request", "VALIDATION_FAILED", parsed.error.issues);
     }
 
     const transform: TransformSpec = parsed.data.transform
@@ -120,6 +120,7 @@ jobsRouter.post("/", async (req: Request, res: Response, next: NextFunction) => 
     };
     await createJobRecord(record);
 
+    jobsEnqueuedTotal.inc({ status: "accepted" });
     logger.info(
       { id: bullJob.id, url: parsed.data.url, hasTransform: true },
       "job created",
@@ -131,13 +132,18 @@ jobsRouter.post("/", async (req: Request, res: Response, next: NextFunction) => 
 });
 
 /**
- * GET /api/jobs
- * List recent jobs (newest first).
+ * GET /api/jobs?limit=N&cursor=<id>
+ * List recent jobs (newest first). Capped to 200 to bound payload size.
+ * Cursor is the last job's `id`; pass it to get the next page.
  */
-jobsRouter.get("/", async (_req: Request, res: Response, next: NextFunction) => {
+jobsRouter.get("/", async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const jobs = await listJobRecords(50);
-    return res.json({ jobs });
+    const limitRaw = Number(req.query.limit);
+    const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(200, Math.floor(limitRaw)) : 50;
+    const cursor = typeof req.query.cursor === "string" ? req.query.cursor : null;
+    const jobs = await listJobRecords(limit, cursor);
+    const nextCursor = jobs.length === limit ? jobs[jobs.length - 1]!.id : null;
+    return res.json({ jobs, nextCursor });
   } catch (err) {
     return next(err);
   }

@@ -82,15 +82,23 @@ export const getJobRecord = async (id: string): Promise<JobRecord | null> => {
 };
 
 /**
- * List recent job records (newest first).
+ * List recent job records (newest first), with optional cursor-based
+ * pagination. Pass `cursor` = the last id from a previous page to get
+ * the next batch.
  */
-export const listJobRecords = async (limit = 50): Promise<JobRecord[]> => {
+export const listJobRecords = async (
+  limit = 50,
+  cursor: string | null = null,
+): Promise<JobRecord[]> => {
   const db = getDb();
-  const snap = await db
-    .collection(COLLECTION)
-    .orderBy("createdAt", "desc")
-    .limit(limit)
-    .get();
+  let q = db.collection(COLLECTION).orderBy("createdAt", "desc");
+  if (cursor) {
+    const cursorSnap = await db.collection(COLLECTION).doc(cursor).get();
+    if (cursorSnap.exists) {
+      q = q.startAfter(cursorSnap);
+    }
+  }
+  const snap = await q.limit(limit).get();
   return snap.docs.map((d) => d.data() as JobRecord);
 };
 

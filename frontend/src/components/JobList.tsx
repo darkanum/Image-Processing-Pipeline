@@ -1,9 +1,13 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
+import { collection, onSnapshot, orderBy, query, limit } from "firebase/firestore";
+import { getDb } from "../lib/firebase";
 import type { JobRecord, JobStatus } from "../types/job";
 import { JobCard } from "./JobCard";
 
 interface JobListProps {
   refreshSignal: number;
+  /** Notify parent when a new job is created (e.g. from a retry). */
+  onJobCreated?: (job: { id: string }) => void;
 }
 
 type TabKey = "queue" | "executing" | "completed" | "failed";
@@ -16,15 +20,51 @@ interface TabDef {
 
 const TABS: TabDef[] = [
   { key: "queue", label: "Queue", match: (s) => s === "pending" },
-  { key: "executing", label: "Executing", match: (s) => s === "downloading" || s === "processing" || s === "uploading" },
+  {
+    key: "executing",
+    label: "Executing",
+    match: (s) => s === "downloading" || s === "processing" || s === "uploading",
+  },
   { key: "completed", label: "Completed", match: (s) => s === "completed" },
   { key: "failed", label: "Failed", match: (s) => s === "failed" },
 ];
 
-export const JobList = ({ refreshSignal: _refreshSignal }: JobListProps): JSX.Element => {
-  void _refreshSignal; // kept for API stability
-  const { jobs, loading, error } = useJobsLite(50);
+const EMPTY_HINTS: Record<TabKey, string> = {
+  queue: "Submit a URL above to enqueue your first job.",
+  executing: "Nothing is running right now — your jobs will appear here as they start.",
+  completed: "Completed jobs will appear here with the result URL.",
+  failed: "Failed jobs will appear here with their error message and a retry button.",
+};
+
+const MAX_JOBS = 50;
+
+export const JobList = ({ refreshSignal: _refreshSignal, onJobCreated }: JobListProps): JSX.Element => {
+  void _refreshSignal; // accepted for API stability
+  const { jobs, loading, error, refresh } = useJobsLite(MAX_JOBS);
   const [tab, setTab] = useState<TabKey>("queue");
+
+  // Auto-switch to a more interesting tab when the user lands on a tab
+  // with no jobs. The most useful heuristic: if there are running jobs,
+  // show them; otherwise show the most recent (completed or failed).
+  useEffect(() => {
+    if (loading) return;
+    if (jobs.length === 0) return;
+    const counts = {
+      queue: 0,
+      executing: 0,
+      completed: 0,
+      failed: 0,
+    };
+    for (const j of jobs) {
+      const t = TABS.find((tDef) => tDef.match(j.status));
+      if (t) counts[t.key] += 1;
+    }
+    if (counts[tab] > 0) return;
+    if (counts.executing > 0) setTab("executing");
+    else if (counts.completed > 0) setTab("completed");
+    else if (counts.failed > 0) setTab("failed");
+    // don't auto-switch to queue when nothing is in it
+  }, [jobs, loading, tab]);
 
   const grouped = useMemo(() => {
     const buckets: Record<TabKey, JobRecord[]> = {
@@ -41,8 +81,8 @@ export const JobList = ({ refreshSignal: _refreshSignal }: JobListProps): JSX.El
   }, [jobs]);
 
   const tabsWithCounts = TABS.map((t) => ({ ...t, count: grouped[t.key].length }));
-
   const visible = grouped[tab];
+  const activeTab = tabsWithCounts.find((t) => t.key === tab)!;
 
   return (
     <div className="job-list">
@@ -65,16 +105,29 @@ export const JobList = ({ refreshSignal: _refreshSignal }: JobListProps): JSX.El
       {loading && jobs.length === 0 ? (
         <div className="empty">Connecting to Firestore…</div>
       ) : error ? (
-        <div className="empty error">Failed to subscribe: {error}</div>
+        <div className="empty error">
+          <p>Failed to subscribe: {error}</p>
+          <button type="button" className="retry-button" onClick={refresh}>
+            ↻ Retry connection
+          </button>
+        </div>
       ) : visible.length === 0 ? (
         <div className="empty">
-          <p>No {tabsWithCounts.find((t) => t.key === tab)?.label.toLowerCase()} jobs.</p>
-          <p className="empty-hint">Submit a URL above to create one.</p>
+          <p>No {activeTab.label.toLowerCase()} jobs.</p>
+          <p className="empty-hint">{EMPTY_HINTS[tab]}</p>
         </div>
       ) : (
         <div className="job-cards">
           {visible.map((job) => (
-            <JobCard key={job.id} job={job} />
+            <JobCard
+              key={job.id}
+              job={job}
+              onRetry={
+                job.status === "failed" && onJobCreated
+                  ? onJobCreated
+                  : undefined
+              }
+            />
           ))}
         </div>
       )}
@@ -82,27 +135,23 @@ export const JobList = ({ refreshSignal: _refreshSignal }: JobListProps): JSX.El
   );
 };
 
-/**
- * Lightweight wrapper around the useJobs hook — reuses the same logic but
- * allows this component to be self-contained.
- */
-import { useEffect, useState as useReactState, useCallback } from "react";
-import { collection, onSnapshot, orderBy, query, limit } from "firebase/firestore";
-import { getDb } from "../lib/firebase";
-import type { JobRecord as JobRecordType } from "../types/job";
-
 interface UseJobsLiteResult {
-  jobs: JobRecordType[];
+  jobs: JobRecord[];
   loading: boolean;
   error: string | null;
   refresh: () => void;
 }
 
+/**
+ * Subscribes to the `jobs` collection. The list refreshes live via
+ * Firestore's `onSnapshot` (no polling), with a small `tick` counter to
+ * let the parent force a reconnect.
+ */
 const useJobsLite = (maxJobs: number): UseJobsLiteResult => {
-  const [jobs, setJobs] = useReactState<JobRecordType[]>([]);
-  const [loading, setLoading] = useReactState(true);
-  const [error, setError] = useReactState<string | null>(null);
-  const [tick, setTick] = useReactState(0);
+  const [jobs, setJobs] = useState<JobRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [tick, setTick] = useState(0);
 
   useEffect(() => {
     setLoading(true);
@@ -117,9 +166,9 @@ const useJobsLite = (maxJobs: number): UseJobsLiteResult => {
       unsub = onSnapshot(
         q,
         (snap) => {
-          const items: JobRecordType[] = [];
+          const items: JobRecord[] = [];
           snap.forEach((d) => {
-            items.push({ id: d.id, ...(d.data() as Omit<JobRecordType, "id">) });
+            items.push({ id: d.id, ...(d.data() as Omit<JobRecord, "id">) });
           });
           setJobs(items);
           setLoading(false);

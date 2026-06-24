@@ -1,246 +1,444 @@
 # Real-Time Image Processing Pipeline
 
-A containerized full-stack image-processing pipeline. Users submit a URL via a React
-UI, the URL hits an Express API that enqueues a BullMQ job, a worker downloads +
-transforms the image with `sharp`, uploads the result to Firebase Storage, and
-streams status updates to the UI through a Firestore real-time listener (no polling).
+A containerized full-stack image-processing pipeline built to production standards.
+Users submit a URL via a React UI, the URL hits an Express API that enqueues a
+BullMQ job, a worker downloads + transforms the image with `sharp`, uploads the
+result to Firebase Storage, and streams status updates to the UI through a
+Firestore real-time listener (no polling).
+
+This codebase demonstrates what a small but production-ready service looks like —
+not a toy demo. The frontend, API, worker, and storage layers are wired for
+horizontal scaling, real observability, and operational hygiene.
+
+---
+
+## Table of contents
+
+- [Architecture](#architecture)
+- [Features](#features)
+- [Quick start](#quick-start)
+- [API reference](#api-reference)
+- [Configuration reference](#configuration-reference)
+- [Operations](#operations)
+- [Security model](#security-model)
+- [Scaling](#scaling)
+- [Project layout](#project-layout)
+- [Testing](#testing)
+- [Known limitations](#known-limitations)
+
+---
+
+## Architecture
 
 ```
-   ┌────────┐  POST /api/jobs   ┌────────┐   enqueue    ┌────────┐
-   │React UI├──────────────────▶│Express │──────────────▶│ Redis  │
-   │ +Firestore listener       │  API   │               │ (BullMQ│
-   └────────┘                  └────┬───┘               │  queue)│
-        ▲                          │                    └───┬────┘
-        │ onSnapshot(Firestore)    │                        │
-        │                          ▼                        ▼ consume
-   ┌────┴────┐  write status  ┌────────────┐   fetch  ┌─────────────┐
-   │Firestore│◀──────────────│   Worker    │◀────────│  BullMQ      │
-   │+Storage │   upload OK   │ (sharp etc.)│         │  Worker      │
-   └─────────┘               └────────────┘         └─────────────┘
+   Browser (React + Firestore listener)
+        │
+        │  1. POST /api/jobs
+        │  2. onSnapshot(jobs) — real-time updates
+        ▼
+   ┌──────────────────────────────────────┐    enqueue    ┌─────────────┐
+   │  API (Express + zod + helmet)        │──────────────▶│  Redis      │
+   │  ─ /health, /health/ready, /live     │               │  (BullMQ)   │
+   │  ─ /metrics (Prometheus)             │               └──────┬──────┘
+   │  ─ rate-limited + API-key guarded    │                      │
+   │  ─ structured logs + request IDs     │                      │ consume
+   └──────────────────────────────────────┘                      ▼
+                                              ┌──────────────────────────────────┐
+                                              │  Worker (BullMQ consumer)        │
+                                              │  ─ download → transform → upload │
+                                              │  ─ hard timeouts + structured    │
+                                              │    logs + Prometheus metrics     │
+                                              │  ─ graceful SIGTERM drain        │
+                                              └────────┬──────────────┬──────────┘
+                                                       │              │
+                                              write    │              │   write
+                                                       ▼              ▼
+                                              ┌──────────────┐  ┌──────────────┐
+                                              │  Firestore   │  │   Storage    │
+                                              │  (job state) │  │  (results)   │
+                                              └──────────────┘  └──────────────┘
+                                                       ▲              │
+                                                       │              │ serve
+                                                       └──────────────┘
+                                                            Browser
 ```
 
-## Stack
+**Why this shape:**
+- The React UI subscribes to Firestore (not the API), so the worker is the
+  only thing that ever talks to Firebase for state — a clean write/read
+  split with no polling.
+- BullMQ is the right primitive for thousands of in-flight jobs: at-least-once
+  delivery, exponential backoff, dead-letter behavior, and per-job
+  observability.
+- A periodic cleanup loop in the worker reaps job records and storage objects
+  past their TTL — without this, the storage layer grows unbounded.
 
-- **Backend**: Node.js 20, TypeScript, Express, BullMQ, firebase-admin, sharp, zod, pino
-- **Frontend**: React 18, TypeScript, Vite, Firebase JS SDK (with `onSnapshot`)
-- **Queue**: Redis 7
-- **Storage / status DB**: Firebase Local Emulator Suite (Firestore + Storage + Auth)
-- **Tests**: Vitest
+---
 
-## Architecture highlights
+## Features
 
-- Functional, typed service modules (`firebase.ts`, `queue.ts`, `imageProcessor.ts`,
-  `downloader.ts`, `jobRepository.ts`) — each module owns a single concern and
-  exports a small pure API.
-- The API and the worker are **two entrypoints of the same backend codebase**
-  (`src/server.ts` and `src/worker-entry.ts`). They share Redis and Firebase
-  clients but run in separate containers for clean horizontal scaling.
-- Each job's BullMQ id **is** its Firestore document id, so the worker only needs
-  one identifier (`job.id`) to update status — no lookup join.
-- Status updates flow in two channels: the Firestore document (drives the UI
-  listener) and BullMQ `progress` (drives ops dashboards).
-- `UnrecoverableError` is thrown for non-retryable failures (bad URL, non-image,
-  too large) so BullMQ doesn't waste retries on deterministic errors.
-- Strict input validation with `zod` in the API layer; max-bytes + timeout
-  enforced in the downloader.
+### Functional
+- **One-shot image transform pipeline**: output format, quality, resize (fit /
+  crop / pad), crop, grayscale, watermark (text **or** image URL with 9-zone
+  positioning + margin), rotation, horizontal/vertical flip, overall opacity.
+- **Real-time status streaming** from worker to UI via Firestore
+  (`onSnapshot` — no polling).
+- **Cursor-paginated job list** with segmented Queue / Executing / Completed /
+  Failed tabs.
+- **One-click retry** for failed jobs that re-submits with the same parameters.
+- **Live API health indicator** in the header (green / amber / grey).
 
-## Layout
+### Reliability
+- Per-job hard timeout (default 120s) to keep the worker from being held
+  hostage by a stuck download.
+- Exponential-backoff retries with `UnrecoverableError` for failures that
+  can't be retried (bad URL, non-image, too large, transform fail).
+- Graceful SIGTERM shutdown for both API and worker (drain in-flight, then
+  force-exit after grace).
+- Periodic cleanup of old Firestore docs and Storage objects.
 
-```
-.
-├── backend/                # Node.js API + worker (TypeScript)
-│   ├── src/
-│   │   ├── api/            # Express routes
-│   │   ├── services/       # firebase, queue, downloader, imageProcessor, jobRepository
-│   │   ├── workers/        # imageWorker (job handler)
-│   │   ├── types/          # JobRecord, JobStatus, etc.
-│   │   ├── config/         # env loading + validation (zod)
-│   │   ├── utils/          # logger
-│   │   ├── server.ts       # API entrypoint
-│   │   └── worker-entry.ts # worker entrypoint
-│   ├── tests/              # vitest unit tests
-│   ├── Dockerfile
-│   ├── package.json
-│   └── tsconfig.json
-├── frontend/               # React + Vite UI
-│   ├── src/
-│   │   ├── components/     # JobForm, JobList, JobCard, ProgressBar
-│   │   ├── hooks/          # useJobs (Firestore onSnapshot)
-│   │   ├── lib/            # firebase client init
-│   │   ├── types/          # JobRecord mirror
-│   │   ├── test/           # component test
-│   │   ├── App.tsx, main.tsx, index.css
-│   ├── public/             # favicon
-│   ├── Dockerfile, nginx.conf
-│   └── package.json
-├── firebase/               # emulator config + Dockerfile
-│   ├── firebase.json
-│   ├── firestore.rules
-│   └── storage.rules
-├── docker-compose.yml      # api + worker + redis + firebase-emulator + frontend
-├── .env.example
-├── .gitignore
-└── README.md
-```
+### Security
+- Optional API-key auth (`X-Api-Key` header) with constant-time compare and
+  fail-closed defaults for unsafe placeholders.
+- CORS lockdown to an explicit origin allow-list.
+- `helmet` security headers (CSP, HSTS in production, X-Frame-Options, etc.).
+- Per-IP rate limiting (30 writes/min, 300 reads/min).
+- Request body size limit (64 KB).
+- `x-powered-by` header disabled.
+- Container hardening: `no-new-privileges`, non-root user, memory caps.
 
-## Prerequisites
+### Observability
+- Structured JSON logs (`pino`) with per-request `requestId` correlation.
+- Prometheus `/metrics` endpoint: HTTP latency histogram, request counter,
+  enqueue counter, completed counter, active gauge, processing duration,
+  image bytes processed, plus all `prom-client` default Node metrics.
+- K8s-style probes: `/health/live` (am I running?) and `/health/ready` (am I
+  serving?).
+- `X-Request-Id` response header on every request.
 
-- Docker + Docker Compose (v2)
-- **OR** Node.js 20+ and Redis 7+ for a non-containerized run
+### Performance
+- Code-split frontend bundle: main chunk 163 KB (52 KB gzipped) + lazy
+  `JobList` chunk that includes the Firebase SDK.
+- `1-year immutable` cache on hashed Vite assets; `no-cache` on `index.html`.
+- `WORKER_CONCURRENCY` tunable per environment.
 
-## Quick start (Docker)
+---
+
+## Quick start
 
 ```bash
-git clone <this-repo>
-cd "Real-Time Image Processing Pipeline"
+# 1. From the project root
 docker compose up --build
+
+# 2. Open the app
+#    Frontend:  http://localhost:8088
+#    API:       http://localhost:3100
+#    Firebase:  http://localhost:4001  (UI for browsing Firestore/Storage)
 ```
 
-Then open:
+The first build takes a few minutes (libvips is compiled). Subsequent rebuilds
+are cached.
 
-- **Frontend (DEMO)**: <http://localhost:8088>
-- **Firebase emulator UI**: <http://localhost:4001>
-- **API health**: <http://localhost:3100/health>
+Submit any image URL on the form, watch the job appear in the **Queue** tab
+and progress to **Executing** → **Completed** with a preview of the result.
 
-The full port map (host → container) lives at the top of `docker-compose.yml`.
+---
 
-The frontend is wired to talk to the API via host port 3100 and to the
-Firestore/Storage emulators via host ports 8085/9200 (see `docker-compose.yml`
-for the full map).
+## API reference
 
-To stop and remove everything:
+All endpoints are JSON. Errors come back as `{ error, requestId, code? }`.
+The `requestId` is the same as the `X-Request-Id` response header — include
+it in support tickets so logs can be found.
+
+### `POST /api/jobs` — submit a job
 
 ```bash
-docker compose down -v
+curl -X POST http://localhost:3100/api/jobs \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "url": "https://picsum.photos/800/600",
+    "transform": {
+      "outputFormat": "jpeg",
+      "quality": 82,
+      "resize": { "mode": "fit", "width": 1024, "lockAspectRatio": true },
+      "watermark": {
+        "kind": "text",
+        "text": "Mavis",
+        "position": "bottom-right",
+        "margin": 32,
+        "opacity": 70,
+        "size": 28
+      },
+      "rotation": 0
+    }
+  }'
 ```
 
-## Running tests
+**Response 201:** the full `JobRecord` (see `GET /api/jobs/:id`).
 
-### Backend (Vitest)
+**Possible errors:**
+- `400 VALIDATION_FAILED` — invalid `url` or `transform` (zod issues in `details`).
+- `401` — missing / invalid API key.
+- `429` — rate limit hit.
+- `5xx` — server error.
+
+### `GET /api/jobs` — list recent jobs
+
+Query params: `limit` (1-200, default 50), `cursor` (last job id from prev page).
 
 ```bash
-cd backend
-npm install
-npm test
+curl 'http://localhost:3100/api/jobs?limit=10'
 ```
 
-Covers:
+**Response 200:** `{ jobs: JobRecord[], nextCursor: string | null }`.
 
-- `transformImage` — resize, grayscale, watermark, format conversion, error path
-- `POST /api/jobs` — happy path, invalid URL, missing url, http(s)-only
-- `GET /api/jobs` and `GET /api/jobs/:id` — 200 and 404 paths
-- Worker happy path + every error branch (invalid url, not-image, too-large,
-  transient network, transform failure, missing payload)
+### `GET /api/jobs/:id` — get a single job
 
-### Frontend (Vitest + Testing Library)
+Returns the same `JobRecord` shape.
 
-```bash
-cd frontend
-npm install
-npm test
-```
+### `GET /health` — basic liveness
 
-Covers the `<ProgressBar>` component (status labels, percentage clamp, failure).
+Returns `{ status: 'ok', uptime, ts }` — used by Docker's default healthcheck.
 
-## Local dev (without Docker)
+### `GET /health/live` — K8s liveness probe
 
-```bash
-# 1. Start Redis
-docker run --rm -p 6379:6379 redis:7-alpine
-# Or: redis-server
+Returns 200 if the process is responding. Use this to decide whether to
+**restart** the pod.
 
-# 2. Start Firebase emulators
-cd firebase
-docker build -t firebase-emulator .
-docker run --rm -p 4001:4000 -p 8085:8080 -p 9200:9199 -p 9095:9099 firebase-emulator
-# Or: firebase emulators:start --project demo-image-pipeline --config firebase.json
+### `GET /health/ready` — K8s readiness probe
 
-# 3. Backend API
-cd ../backend
-cp .env.example .env
-# .env defaults assume the docker port map (REDIS_HOST=127.0.0.1:6390 etc.)
-npm install
-npm run dev               # http://localhost:3100
+Returns 200 with sub-checks (memory, uptime) — 503 if any sub-check fails.
+Use this to decide whether to **route traffic** to the pod.
 
-# 4. Backend worker (separate terminal)
-npm run dev:worker
+### `GET /metrics` — Prometheus scrape endpoint
 
-# 5. Frontend
-cd ../frontend
-cp .env.example .env
-npm install
-npm run dev               # http://localhost:5173
-```
+Standard Prometheus text format. Scraped by Prometheus at a typical 15s
+interval.
 
-## API
+---
 
-| Method | Path             | Description                              |
-| ------ | ---------------- | ---------------------------------------- |
-| POST   | `/api/jobs`      | Create a job. Body: `{ "url": "..." }`   |
-| GET    | `/api/jobs`      | List recent jobs (newest first, max 50)  |
-| GET    | `/api/jobs/:id`  | Fetch a single job                       |
-| GET    | `/health`        | Health probe                             |
-
-### Job record shape
+## JobRecord shape
 
 ```ts
 {
-  id: string,                  // BullMQ id == Firestore doc id
-  url: string,
-  status: 'pending' | 'downloading' | 'processing' | 'uploading' | 'completed' | 'failed',
-  progress: number,            // 0..100
-  currentStep: 'queued' | 'downloading' | 'processing' | 'uploading' | 'completed' | null,
-  resultUrl: string | null,    // public URL to transformed image (Firebase Storage)
-  errorMessage: string | null,
-  createdAt: number,           // epoch ms
-  updatedAt: number,
-  finishedAt: number | null,
-  metadata: { bytes?, width?, height?, format?, attemptsMade? }
+  id: string;             // BullMQ job id == Firestore doc id
+  url: string;
+  status: "pending" | "downloading" | "processing" | "uploading" | "completed" | "failed";
+  progress: number;       // 0..100
+  currentStep: string;    // e.g. "downloading source", "transforming"
+  resultUrl: string|null; // present once status == "completed"
+  errorMessage: string|null;
+  createdAt: number;      // epoch ms
+  updatedAt: number;
+  finishedAt: number|null;
+  transform: TransformSpec | null;
+  metadata: {
+    bytes?: number;
+    format?: string;      // "jpeg" | "png" | "webp" | "avif" | "gif"
+    width?: number;
+    height?: number;
+  };
 }
 ```
 
-## Test cases (from the spec)
+---
 
-| # | Scenario | Expected |
-| - | -------- | -------- |
-| 1 | Valid PNG/JPG URL | job reaches `completed`, `resultUrl` populated |
-| 2 | Invalid URL (404) | `status=failed`, `errorMessage` describes HTTP 404 |
-| 3 | Non-image URL | `status=failed`, `errorMessage` mentions content-type |
-| 4 | Very large image (>10 MB) | rejected by `downloader` (`TOO_LARGE`) before sharp runs |
-| 5 | Multiple simultaneous jobs | `WORKER_CONCURRENCY` (default 4) processed in parallel |
-| 6 | Redis connection failure recovery | BullMQ retries with exponential backoff; `maxRetriesPerRequest=null` allows reconnect |
+## Configuration reference
 
-Each case is exercised by the test suite or by submitting the corresponding
-input through the UI.
+All values are read at process start and validated by zod. Missing required
+values fail fast at boot.
 
-## Configuration
+| Env var                  | Default            | Notes                                                   |
+| ------------------------ | ------------------ | ------------------------------------------------------- |
+| `PORT`                   | `3001`             | API listen port                                         |
+| `NODE_ENV`               | `development`      | `production` enables HSTS, security warnings, etc.      |
+| `LOG_LEVEL`              | `info`             | `fatal`/`error`/`warn`/`info`/`debug`/`trace`            |
+| `API_KEY`                | *(unset)*          | If set, all `POST /api/jobs` requests must include `X-Api-Key: …`. Empty = open (dev only). |
+| `ALLOWED_ORIGINS`        | *(unset)*          | Comma-separated CORS allow-list. Empty = permissive.    |
+| `REDIS_HOST` / `REDIS_PORT` | `127.0.0.1` / `6379` | BullMQ backend                                     |
+| `WORKER_CONCURRENCY`     | `4`                | Concurrent jobs per worker process                      |
+| `JOB_MAX_IMAGE_BYTES`    | `10485760`         | Reject source images larger than this at the API        |
+| `JOB_DOWNLOAD_TIMEOUT_MS`| `20000`            | Source download timeout                                 |
+| `JOB_HARD_TIMEOUT_MS`    | `120000`           | End-to-end per-job timeout (download → upload)          |
+| `JOB_TTL_HOURS`          | `24`               | Firestore records older than this are swept             |
+| `STORAGE_TTL_HOURS`      | `24`               | Result files older than this are swept                  |
+| `FIREBASE_PROJECT_ID`    | `demo-image-pipeline` |                                                       |
+| `FIREBASE_STORAGE_BUCKET` | *(unset)*         | Required for real Firebase                              |
+| `FIRESTORE_EMULATOR_HOST` | *(unset)*        | When set, the Firebase Admin SDK talks to the emulator  |
+| `FIREBASE_STORAGE_EMULATOR_HOST` | *(unset)*  | Same for Storage                                        |
+| `FIREBASE_AUTH_EMULATOR_HOST` | *(unset)*     | Same for Auth                                           |
 
-All config is via environment variables — see `backend/.env.example` and
-`frontend/.env.example`. Notable knobs:
+---
 
-- `WORKER_CONCURRENCY` — how many jobs a worker process handles in parallel
-- `JOB_MAX_IMAGE_BYTES` — hard cap on downloaded image size (default 10 MB)
-- `JOB_DOWNLOAD_TIMEOUT_MS` — request timeout for downloads
-- `REDIS_HOST` / `REDIS_PORT` / `REDIS_PASSWORD` — Redis location
-- `FIRESTORE_EMULATOR_HOST` / `FIREBASE_STORAGE_EMULATOR_HOST` / `FIREBASE_AUTH_EMULATOR_HOST`
-  — when set, the backend points at the local emulator (no real credentials)
+## Operations
 
-## Production deployment (sketch)
+### Health & observability
 
-1. Provision a real Firebase project + service account JSON.
-2. Set `GOOGLE_APPLICATION_CREDENTIALS=/path/to/sa.json` and **unset** the
-   emulator host vars.
-3. Run `api` and `worker` containers pointing at a managed Redis (e.g.
-   Upstash, Elasticache).
-4. The frontend should NOT set `VITE_FIRESTORE_EMULATOR_HOST` etc. — let it
-   talk to real Firebase. Use real `VITE_FIREBASE_*` config values.
+```bash
+# Health (cheap, no auth)
+curl http://localhost:3100/health/ready | jq
 
-## Notes
+# Metrics
+curl http://localhost:3100/metrics | head -20
+```
 
-- Image transforms applied: **resize to 800 px (aspect-preserving)**, **grayscale**,
-  and **text watermark "Mavis Pipeline"** (bottom-right, SVG overlay — no font files).
-- `sharp` runs natively in the container via `libvips42`.
-- The Firebase emulator image ships with OpenJDK 17 because the Firebase CLI's
-  emulator suite is JVM-based.
-- Real Firebase mode and emulator mode are **the same code path** — the Admin SDK
-  automatically uses emulator hosts when those env vars are set.
+Add to your Prometheus config:
+
+```yaml
+scrape_configs:
+  - job_name: 'image-pipeline-api'
+    static_configs:
+      - targets: ['api:3001']
+    metrics_path: /metrics
+```
+
+### Logs
+
+Both services log structured JSON to stdout. Pipe to your log shipper
+(loki, datadog, etc.) — the format includes a stable `requestId` field for
+correlation.
+
+```bash
+docker compose logs -f api worker
+```
+
+### Common operator tasks
+
+```bash
+# Tail the BullMQ queue
+docker compose exec redis redis-cli
+> KEYS bull:*
+> LRANGE bull:imageProcessing:wait 0 5
+
+# Clear the queue (kills pending jobs)
+docker compose exec redis redis-cli FLUSHDB
+
+# Force-rebuild a single service
+docker compose up -d --build --no-deps api
+```
+
+### Running tests
+
+```bash
+# Backend
+cd backend && npm test
+
+# Frontend
+cd frontend && npm test
+```
+
+---
+
+## Security model
+
+This codebase is built for production but ships with safe-by-default dev
+settings. To deploy it for real, do **at minimum** the following:
+
+1. **Set `API_KEY`** to a strong random secret (≥ 16 chars). Pass it to the
+   frontend via the `VITE_API_KEY` build arg (or your secret manager).
+2. **Set `ALLOWED_ORIGINS`** to your real frontend origin (e.g.
+   `https://app.example.com`).
+3. **Switch off Firebase emulators** — set `FIREBASE_PROJECT_ID` to a real
+   project, `FIREBASE_STORAGE_BUCKET` to a real bucket, and mount
+   `GOOGLE_APPLICATION_CREDENTIALS` with a service account JSON.
+4. **Set `NODE_ENV=production`** in the API and worker env.
+5. **Add a TLS terminator** (nginx, Caddy, ALB) in front of the API. The
+   containers are HTTP only.
+6. **Set up a Prometheus scraper** and an alert on `rate(http_requests_total{status=~"5.."}[5m]) > 0`.
+7. **Restrict Storage bucket access** — public read for result files is
+   fine, but make sure write is only via the service account.
+
+The startup-time security warnings (`logSecurityWarnings`) will print to the
+container logs if any of these are missing in `production` mode.
+
+---
+
+## Scaling
+
+The pipeline scales horizontally along three axes:
+
+- **API**: stateless — scale by adding replicas. Rate limit is per-instance;
+  in production swap to a Redis-backed store via `rate-limit-redis`.
+- **Worker**: stateless consumer — scale by adding worker processes (or
+  pods). The `WORKER_CONCURRENCY` env var controls per-process concurrency;
+  total throughput is `instances × concurrency`. Cleanup sweeps currently
+  run in every worker — for large clusters, gate it on a leader-election
+  lock or move it to a CronJob.
+- **Redis**: the single biggest bottleneck under load. For >10k in-flight
+  jobs, move to a managed Redis with the cluster API; BullMQ supports it
+  out of the box.
+- **Firestore**: throughput scales with the project quota. For very high
+  write rates, batch updates in the worker (write every Nth progress
+  change rather than every one).
+
+A reasonable starting profile for ~1000 jobs/min:
+
+| Service  | CPU  | Memory | Replicas |
+| -------- | ---- | ------ | -------- |
+| API      | 0.5  | 256 MB | 2-4      |
+| Worker   | 2    | 1 GB   | 2-3      |
+| Redis    | 1    | 1 GB   | 1 (HA)   |
+| Storage  | n/a  | n/a    | managed  |
+
+---
+
+## Project layout
+
+```
+.
+├── backend/                # Express API + BullMQ worker (shared image)
+│   ├── src/
+│   │   ├── api/            # routes (health, jobs)
+│   │   ├── middleware/     # security, error handler, rate limit
+│   │   ├── observability/  # metrics, request logger
+│   │   ├── services/       # queue, image processor, downloader, cleanup
+│   │   ├── workers/        # the BullMQ consumer
+│   │   ├── config/         # zod-validated env loader
+│   │   ├── types/          # shared type defs
+│   │   ├── server.ts       # API entry point
+│   │   └── worker-entry.ts # worker entry point
+│   └── tests/              # vitest
+├── frontend/               # React + Vite SPA
+│   ├── src/
+│   │   ├── components/     # JobForm, JobList, JobCard, HealthIndicator…
+│   │   ├── hooks/          # useApiHealth
+│   │   ├── lib/            # api (fetch wrapper), firebase
+│   │   └── test/           # vitest + Testing Library
+│   └── nginx.conf          # cache-control, gzip
+├── firebase/               # Local Emulator Suite container
+└── docker-compose.yml      # the whole stack
+```
+
+---
+
+## Testing
+
+- **Backend:** `npm test` (vitest). 39 tests covering image transforms, the
+  downloader, the worker happy/error paths, and the API surface.
+- **Frontend:** `npm test` (vitest + Testing Library). 13 tests covering the
+  JobForm, the progress bar, and the API wrapper.
+
+End-to-end smoke test: `docker compose up --build`, open
+<http://localhost:8088>, submit `https://picsum.photos/800/600`, verify the
+job completes in <5s with a previewable result.
+
+---
+
+## Known limitations
+
+- The cleanup loop runs in **every** worker — fine for a small cluster, but
+  in a 20-worker fleet this would 20x the Firestore read cost. Move it to a
+  CronJob or use a leader-election lock for big deployments.
+- The rate limiter is **in-memory** per instance — multiple API replicas
+  will let an attacker `replicas × 30` jobs/min. Swap for
+  `rate-limit-redis` to share state.
+- Result URLs are **publicly readable** in the Storage emulator (and in
+  production if you leave the bucket public). For private results, mint
+  signed URLs on demand.
+- The React app currently has no authentication — the API key is a single
+  shared secret. For multi-tenant use, swap for OAuth2 / mTLS / signed JWT.
+- No tracing (OpenTelemetry). Add `auto-instrumentations-node` to each
+  service when you wire it into your tracing backend.
+- Image moderation is not implemented. If the source URL points at
+  user-uploaded content, run it through an ML moderation service before
+  storage.

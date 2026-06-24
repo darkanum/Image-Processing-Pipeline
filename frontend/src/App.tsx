@@ -1,6 +1,13 @@
-import { useState } from "react";
+import { lazy, Suspense, useState } from "react";
 import { JobForm } from "./components/JobForm";
-import { JobList } from "./components/JobList";
+import { HealthIndicator } from "./components/HealthIndicator";
+
+// Code-split the job list — it pulls in the Firebase SDK which is the
+// single largest contributor to the bundle. Loading it on-demand drops
+// initial paint to a fraction of the full size.
+const JobList = lazy(() =>
+  import("./components/JobList").then((m) => ({ default: m.JobList })),
+);
 
 const API_URL =
   (import.meta.env.VITE_API_URL as string | undefined) ?? "/api";
@@ -25,26 +32,32 @@ const App = (): JSX.Element => {
             <p>BullMQ · Firebase · Realtime</p>
           </div>
         </div>
-        <div className="meta">
-          API: <code>{API_URL}</code>
+        <div className="header-meta">
+          <HealthIndicator />
+          <span className="api-line">API: <code>{API_URL}</code></span>
         </div>
       </header>
 
       <main className="container">
-        <section className="card">
-          <h2>Submit URL</h2>
+        <section className="card" aria-labelledby="submit-heading">
+          <h2 id="submit-heading">Submit URL</h2>
           <JobForm
             apiUrl={API_URL === "/api" ? "" : API_URL}
             onCreated={() => setRefreshSignal((n) => n + 1)}
           />
         </section>
 
-        <section className="card">
+        <section className="card" aria-labelledby="jobs-heading">
           <div className="row-between">
-            <h2>Live jobs</h2>
+            <h2 id="jobs-heading">Live jobs</h2>
             <span className="muted">Updates stream from Firestore — no polling</span>
           </div>
-          <JobList refreshSignal={refreshSignal} />
+          <Suspense fallback={<div className="loading-block">Loading job list…</div>}>
+            <JobList
+              refreshSignal={refreshSignal}
+              onJobCreated={() => setRefreshSignal((n) => n + 1)}
+            />
+          </Suspense>
         </section>
       </main>
 

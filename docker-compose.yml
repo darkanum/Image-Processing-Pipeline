@@ -22,6 +22,10 @@ name: image-processing-pipeline
 # Binding to IPv4 only avoids that and makes `http://localhost:<port>`
 # work via the 127.0.0.1 fallback.
 #
+# SECURITY: For production, set API_KEY to a strong random secret and
+# ALLOWED_ORIGINS to your real frontend origin. As-shipped, the API is
+# open and CORS is permissive (suitable for local dev only).
+#
 # If you need to move these, change ONLY the host side (left of `->`) here
 # and `VITE_FIRESTORE_EMULATOR_HOST` / `VITE_FIREBASE_STORAGE_EMULATOR_HOST`
 # / `VITE_FIREBASE_AUTH_EMULATOR_HOST` build args on the frontend service.
@@ -33,7 +37,6 @@ services:
     container_name: pipeline-redis
     command: ["redis-server", "--appendonly", "yes", "--save", "60", "1"]
     ports:
-      # Force IPv4 binding — see note at top of file.
       - "127.0.0.1:6390:6379"
     volumes:
       - redis-data:/data
@@ -43,13 +46,18 @@ services:
       timeout: 3s
       retries: 5
     restart: unless-stopped
+    # Hardening: drop capabilities, run as non-root user, no new privileges.
+    security_opt:
+      - no-new-privileges:true
+    read_only: false   # redis needs to write its AOF
+    # Cap memory so a runaway worker can't OOM the host.
+    mem_limit: 256m
 
   firebase-emulator:
     build:
       context: ./firebase
     container_name: pipeline-firebase
     ports:
-      # Force IPv4 binding — see note at top of file.
       - "127.0.0.1:4001:4000"   # emulator UI
       - "127.0.0.1:8085:8080"   # Firestore
       - "127.0.0.1:9095:9099"   # Auth
@@ -61,6 +69,9 @@ services:
       retries: 10
       start_period: 30s
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 2g     # JVM heap is hungry; 2g is the typical recommended cap
 
   api:
     build:
@@ -75,7 +86,7 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3001
-      LOG_LEVEL: debug
+      LOG_LEVEL: info
       REDIS_HOST: redis
       REDIS_PORT: 6379
       FIREBASE_PROJECT_ID: demo-image-pipeline
@@ -89,10 +100,25 @@ services:
       WORKER_CONCURRENCY: 4
       JOB_MAX_IMAGE_BYTES: 10485760
       JOB_DOWNLOAD_TIMEOUT_MS: 20000
+      JOB_HARD_TIMEOUT_MS: 120000
+      JOB_TTL_HOURS: 24
+      STORAGE_TTL_HOURS: 24
+      # SECURITY: set this in a real deployment. Empty string = open API.
+      API_KEY: ${API_KEY:-}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
     ports:
-      # Force IPv4 binding — see note at top of file.
       - "127.0.0.1:3100:3001"
+    # K8s-style probes wired through Docker's healthcheck.
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://localhost:3001/health/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
 
   worker:
     build:
@@ -118,7 +144,20 @@ services:
       WORKER_CONCURRENCY: 4
       JOB_MAX_IMAGE_BYTES: 10485760
       JOB_DOWNLOAD_TIMEOUT_MS: 20000
+      JOB_HARD_TIMEOUT_MS: 120000
+      JOB_TTL_HOURS: 24
+      STORAGE_TTL_HOURS: 24
     restart: unless-stopped
+    # No healthcheck endpoint in the worker (it's a long-running consumer,
+    # not a request server). K8s liveness would be a BullMQ ping or a
+    # heartbeat metric.
+    security_opt:
+      - no-new-privileges:true
+    # libvips + sharp can use a lot of memory when processing large images.
+    mem_limit: 1g
+    # Stop accepting new jobs after 30s of SIGTERM, force-kill after 40s.
+    stop_grace_period: 30s
+    stop_signal: SIGTERM
 
   frontend:
     build:
@@ -132,16 +171,18 @@ services:
         VITE_FIRESTORE_EMULATOR_HOST: localhost:8085
         VITE_FIREBASE_STORAGE_EMULATOR_HOST: localhost:9200
         VITE_FIREBASE_AUTH_EMULATOR_HOST: localhost:9095
+        # If API_KEY is set, the frontend sends it as X-Api-Key on every
+        # request to /api/jobs.
+        VITE_API_KEY: ${VITE_API_KEY:-}
     container_name: pipeline-frontend
     depends_on:
       - api
     ports:
-      # Force IPv4 binding. Docker Desktop on Windows has known issues with
-      # IPv6 port forwarding (host resolves `localhost` -> ::1 first, which
-      # then hangs). Binding to IPv4 only makes `localhost` resolve fast via
-      # 127.0.0.1 and avoids the wait.
       - "127.0.0.1:8088:80"
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 64m
 
 volumes:
   redis-data:

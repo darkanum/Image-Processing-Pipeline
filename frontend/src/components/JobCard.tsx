@@ -2,9 +2,11 @@ import { useState, type CSSProperties } from "react";
 import type { JobRecord, JobStatus, TransformSpec } from "../types/job";
 import { STATUS_LABEL } from "../types/job";
 import { ProgressBar } from "./ProgressBar";
+import { apiRequest, ApiError } from "../lib/api";
 
 interface JobCardProps {
   job: JobRecord;
+  onRetry?: (newJob: { id: string }) => void;
 }
 
 const formatBytes = (bytes?: number): string => {
@@ -15,8 +17,7 @@ const formatBytes = (bytes?: number): string => {
 };
 
 const formatTime = (ms: number): string => {
-  const d = new Date(ms);
-  return d.toLocaleTimeString();
+  return new Date(ms).toLocaleTimeString();
 };
 
 const elapsed = (createdAt: number, finishedAt: number | null): string => {
@@ -61,19 +62,49 @@ const describeTransform = (t: TransformSpec | null): string[] => {
   return out;
 };
 
-export const JobCard = ({ job }: JobCardProps): JSX.Element => {
+export const JobCard = ({ job, onRetry }: JobCardProps): JSX.Element => {
   const isCompleted = job.status === "completed";
   const isFailed = job.status === "failed";
   const [imgError, setImgError] = useState<boolean>(false);
+  const [retrying, setRetrying] = useState<boolean>(false);
+  const [retryError, setRetryError] = useState<string | null>(null);
   const description = describeTransform(job.transform);
   const showImg = isCompleted && job.resultUrl && !imgError;
+
+  const handleRetry = async (): Promise<void> => {
+    if (!onRetry || retrying) return;
+    setRetrying(true);
+    setRetryError(null);
+    try {
+      // Re-submit the same payload. The transform + URL are the source
+      // of truth — anything else (job id, status) is per-attempt.
+      const payload = { url: job.url, transform: job.transform ?? undefined };
+      const newJob = await apiRequest<{ id: string }>("/jobs", {
+        method: "POST",
+        body: payload,
+      });
+      onRetry(newJob);
+    } catch (err) {
+      if (err instanceof ApiError) {
+        setRetryError(err.message);
+      } else {
+        setRetryError(err instanceof Error ? err.message : String(err));
+      }
+    } finally {
+      setRetrying(false);
+    }
+  };
 
   const stateStyle: CSSProperties = {
     borderLeftColor: statusAccent(job.status),
   };
 
   return (
-    <article className={`job-card ${isCompleted ? "done" : ""} ${isFailed ? "failed" : ""}`} style={stateStyle}>
+    <article
+      className={`job-card ${isCompleted ? "done" : ""} ${isFailed ? "failed" : ""}`}
+      style={stateStyle}
+      aria-busy={job.status !== "completed" && job.status !== "failed"}
+    >
       <header className="job-card-head">
         <div className="job-id" title={job.id}>#{job.id.slice(0, 8)}</div>
         <div className="job-time">
@@ -132,8 +163,24 @@ export const JobCard = ({ job }: JobCardProps): JSX.Element => {
         </div>
       )}
 
-      {isFailed && job.errorMessage && (
-        <div className="error">⚠ {job.errorMessage}</div>
+      {isFailed && (
+        <div className="error">
+          <div>⚠ {job.errorMessage || "Job failed."}</div>
+          {onRetry && (
+            <div className="error-actions">
+              <button
+                type="button"
+                className="retry-button"
+                onClick={handleRetry}
+                disabled={retrying}
+                aria-label="Re-submit this job with the same parameters"
+              >
+                {retrying ? "Retrying…" : "↻ Retry"}
+              </button>
+              {retryError && <span className="error-inline">{retryError}</span>}
+            </div>
+          )}
+        </div>
       )}
     </article>
   );
@@ -150,5 +197,4 @@ function statusAccent(s: JobStatus): string {
   }
 }
 
-// Keep StatusLabel re-exported to silence the "unused" warning when removed.
 void STATUS_LABEL;

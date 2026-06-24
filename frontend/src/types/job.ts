@@ -115,6 +115,22 @@ export const DEFAULT_TRANSFORM: TransformSpec = {
   opacity: 100,
 };
 
+/** A neutral "resize off" spec the form can hand to ResizeSection. */
+export const DEFAULT_RESIZE: ResizeSpec = {
+  mode: "none",
+  lockAspectRatio: true,
+};
+
+/** A neutral watermark spec the form can hand to WatermarkSection. */
+export const DEFAULT_WATERMARK: WatermarkSpec = {
+  kind: "text",
+  text: "watermark",
+  position: "bottom-right",
+  margin: 24,
+  opacity: 70,
+  size: 32,
+};
+
 export const RESOLUTION_PRESETS = {
   "HD 720p (1280×720)": { width: 1280, height: 720 },
   "Full HD 1080p (1920×1080)": { width: 1920, height: 1080 },

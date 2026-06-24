@@ -45,14 +45,14 @@ vi.mock("dotenv", () => ({
 }));
 
 import { jobsRouter } from "../src/api/jobs.js";
+import { errorHandler, notFoundHandler } from "../src/middleware/errorHandler.js";
 
 const buildApp = (): express.Express => {
   const app = express();
   app.use(express.json());
   app.use("/api/jobs", jobsRouter);
-  app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-    res.status(500).json({ error: err.message });
-  });
+  app.use(notFoundHandler);
+  app.use(errorHandler);
   return app;
 };
 
